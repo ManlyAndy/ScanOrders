@@ -41,7 +41,7 @@ function renderRouteStatus() {
   const el = document.getElementById("route-status");
   const clearBtn = document.getElementById("clear-route-btn");
   if (!currentRoute) {
-    el.textContent = "Маршрут не загружен — сканирование только по статусу";
+    el.textContent = "Маршрут не загружен";
     clearBtn.style.display = "none";
     return;
   }
@@ -108,7 +108,7 @@ async function doLogin() {
   errEl.textContent = "";
 
   if (!login || !pass) {
-    errEl.textContent = "Заполните логин и пароль";
+    errEl.textContent = "логин и пароль";
     return;
   }
 
@@ -260,7 +260,7 @@ function renderNotFound(code) {
     <div class="card bad">
       <div class="badge bad">НЕ НАЙДЕНО</div>
       <div class="num">№ ${escapeHtml(code)}</div>
-      <p class="meta">Отгрузка с таким номером не найдена. Это может быть чужой или неверный штрихкод.</p>
+      <p class="meta">Отгрузка с таким номером не найдена</p>
     </div>`;
 }
 
@@ -271,7 +271,7 @@ function renderWrongStatus(data) {
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
       <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-      <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
+      <p class="meta">Этот заказ ещё не в статусе "Собрано"</p>
     </div>`;
 }
 
@@ -281,7 +281,7 @@ function renderAlreadyShipped(data) {
       <div class="badge bad">УЖЕ ОТГРУЖЕНО</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p>
+      <p class="meta">Этот заказ уже был отсканирован</p>
     </div>`;
 }
 
@@ -291,7 +291,7 @@ function renderNotInRoute(data) {
       <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Заказ собран, но его нет в загруженном сегодняшнем маршруте. Проверьте, тот ли это рейс.</p>
+      <p class="meta">Заказ собран, но его нет в загруженном сегодняшнем маршруте</p>
     </div>`;
 }
 
