@@ -7,7 +7,6 @@ const CACHE_NAME = "sklad-scanner-shell-v1";
 const SHELL_FILES = [
   "./index.html",
   "./app.js",
-  "./config.js",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
