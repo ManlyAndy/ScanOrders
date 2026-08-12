@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Контроль отгрузок</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: #111827;
+    color: #f3f4f6;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .screen { display: none; flex: 1; flex-direction: column; padding: 20px; }
+  .screen.active { display: flex; }
+
+  h1 { font-size: 20px; margin: 0 0 16px; }
+
+  input {
+    width: 100%;
+    padding: 14px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    border: 1px solid #374151;
+    background: #1f2937;
+    color: #f3f4f6;
+    font-size: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 10px;
+  }
+  .btn-primary { background: #2563eb; color: white; }
+  .btn-secondary { background: #374151; color: #f3f4f6; }
+  .btn-success { background: #16a34a; color: white; }
+  .btn-danger { background: #dc2626; color: white; }
+  .error { color: #f87171; font-size: 14px; margin-top: 6px; min-height: 18px; }
+
+  #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .topbar .who { font-size: 13px; color: #9ca3af; }
+  .link-btn {
+    background: none; border: none; color: #93c5fd; width: auto; padding: 4px;
+    text-decoration: underline; font-size: 13px;
+  }
+
+  .card {
+    background: #1f2937;
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .card.ok { border: 2px solid #16a34a; }
+  .card.bad { border: 2px solid #dc2626; }
+  .card .badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .badge.ok { background: #14532d; color: #86efac; }
+  .badge.bad { background: #7f1d1d; color: #fca5a5; }
+
+  .card .num { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .card .meta { font-size: 14px; color: #d1d5db; margin-bottom: 4px; }
+  .card .meta b { color: #f3f4f6; }
+
+  .spinner {
+    border: 3px solid #374151;
+    border-top: 3px solid #2563eb;
+    border-radius: 50%;
+    width: 28px; height: 28px;
+    animation: spin 0.8s linear infinite;
+    margin: 20px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hint { font-size: 13px; color: #9ca3af; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<!-- ЭКРАН 1: ВХОД -->
+<div id="screen-login" class="screen active">
+  <h1>Вход — Контроль отгрузок</h1>
+  <p class="hint" style="margin-bottom:16px; text-align:left;">
+    Введите ваш обычный логин и пароль от МойСклад. Они сохранятся только на этом телефоне.
+  </p>
+  <input id="login-user" type="text" placeholder="Логин (email) в МойСклад" autocomplete="username">
+  <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
+  <button class="btn-primary" onclick="doLogin()">Войти</button>
+  <div id="login-error" class="error"></div>
+</div>
+
+<!-- ЭКРАН 2: СКАНЕР -->
+<div id="screen-scan" class="screen">
+  <div class="topbar">
+    <span class="who" id="who-label"></span>
+    <button class="link-btn" onclick="logout()">Выйти</button>
+  </div>
+  <h1>Сканируйте штрихкод отгрузки</h1>
+  <div id="reader"></div>
+  <button class="btn-secondary" onclick="showManualInput()">Ввести номер вручную</button>
+  <div id="manual-input-wrap" style="display:none;">
+    <input id="manual-input" type="text" placeholder="Номер отгрузки, напр. 26715">
+    <button class="btn-primary" onclick="submitManual()">Найти</button>
+  </div>
+</div>
+
+<!-- ЭКРАН 3: РЕЗУЛЬТАТ -->
+<div id="screen-result" class="screen">
+  <div class="topbar">
+    <span class="who" id="who-label-2"></span>
+    <button class="link-btn" onclick="logout()">Выйти</button>
+  </div>
+  <div id="result-body"></div>
+  <button class="btn-secondary" onclick="backToScan()">← Сканировать следующий</button>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
