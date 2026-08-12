@@ -6,7 +6,7 @@ const CONFIG = {
   // Адрес вашего прокси на Cloudflare Workers.
   // Получите его после того, как задеплоите worker.js (см. README.md).
   // Пример: "https://sklad-scanner.ваш-логин.workers.dev"
-  PROXY_URL: "https://ЗАМЕНИТЕ-НА-СВОЙ-WORKER.workers.dev",
+  PROXY_URL: "https://scanorders.ditrichhans10.workers.dev",
 
   // Название статуса, который считается "готов к отгрузке" —
   // именно отгрузки в этом статусе разрешено сканировать и отгружать.
