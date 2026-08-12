@@ -4,6 +4,78 @@
 
 let html5QrCode = null;
 let currentResult = null;
+let currentRoute = null; // { date, numbers: [...], scanned: Set }
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function routeStorageKey() {
+  return "sklad_route_" + todayStr();
+}
+
+function loadRouteFromStorage() {
+  const raw = localStorage.getItem(routeStorageKey());
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    return { date: data.date, numbers: data.numbers, scanned: new Set(data.scanned || []) };
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveRouteToStorage() {
+  if (!currentRoute) return;
+  localStorage.setItem(
+    routeStorageKey(),
+    JSON.stringify({
+      date: currentRoute.date,
+      numbers: currentRoute.numbers,
+      scanned: Array.from(currentRoute.scanned),
+    })
+  );
+}
+
+function renderRouteStatus() {
+  const el = document.getElementById("route-status");
+  const clearBtn = document.getElementById("clear-route-btn");
+  if (!currentRoute) {
+    el.textContent = "Маршрут не загружен — сканирование только по статусу";
+    clearBtn.style.display = "none";
+    return;
+  }
+  el.textContent = `Маршрут на ${currentRoute.date}: отсканировано ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+  clearBtn.style.display = "inline-block";
+}
+
+async function loadRoute() {
+  const el = document.getElementById("route-status");
+  el.textContent = "Загружаю маршрут…";
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${todayStr()}`, {
+      headers: { Authorization: getSavedAuth() },
+    });
+    const data = await res.json();
+
+    if (!data.found) {
+      el.textContent = "Логист ещё не загрузил маршрут на сегодня";
+      return;
+    }
+
+    currentRoute = { date: data.date, numbers: data.numbers, scanned: new Set() };
+    saveRouteToStorage();
+    renderRouteStatus();
+  } catch (e) {
+    el.textContent = "Не удалось загрузить маршрут — проверьте интернет";
+  }
+}
+
+function clearRoute() {
+  currentRoute = null;
+  localStorage.removeItem(routeStorageKey());
+  renderRouteStatus();
+}
 
 function screens() {
   return {
@@ -75,6 +147,8 @@ function logout() {
 function enterScanScreen() {
   document.getElementById("who-label").textContent = getSavedUser();
   document.getElementById("who-label-2").textContent = getSavedUser();
+  currentRoute = loadRouteFromStorage();
+  renderRouteStatus();
   show("scan");
   startScanner();
 }
@@ -169,10 +243,12 @@ async function lookupCode(code) {
 
     if (data.alreadyShipped) {
       renderAlreadyShipped(data);
-    } else if (data.ready) {
-      renderReady(data);
-    } else {
+    } else if (!data.ready) {
       renderWrongStatus(data);
+    } else if (currentRoute && !currentRoute.numbers.includes(data.name)) {
+      renderNotInRoute(data);
+    } else {
+      renderReady(data);
     }
   } catch (e) {
     body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Не удалось связаться с сервером. Проверьте интернет.</p></div>';
@@ -209,6 +285,16 @@ function renderAlreadyShipped(data) {
     </div>`;
 }
 
+function renderNotInRoute(data) {
+  document.getElementById("result-body").innerHTML = `
+    <div class="card bad">
+      <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
+      <div class="num">№ ${escapeHtml(data.name)}</div>
+      <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
+      <p class="meta">Заказ собран, но его нет в загруженном сегодняшнем маршруте. Проверьте, тот ли это рейс.</p>
+    </div>`;
+}
+
 function renderReady(data) {
   document.getElementById("result-body").innerHTML = `
     <div class="card ok">
@@ -236,6 +322,11 @@ async function confirmShip() {
     const data = await res.json();
 
     if (data.ok) {
+      if (currentRoute) {
+        currentRoute.scanned.add(currentResult.name);
+        saveRouteToStorage();
+        renderRouteStatus();
+      }
       body.innerHTML = `
         <div class="card ok">
           <div class="badge ok">ОТГРУЖЕНО ✓</div>
@@ -259,6 +350,9 @@ function escapeHtml(str) {
 // ---------- СТАРТ ----------
 
 window.addEventListener("load", () => {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
   if (getSavedAuth()) {
     enterScanScreen();
   } else {
