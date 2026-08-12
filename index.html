@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Контроль отгрузок</title>
 <link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#111827">
 <style>
   * { box-sizing: border-box; }
   body {
@@ -117,6 +120,13 @@
     <span class="who" id="who-label"></span>
     <button class="link-btn" onclick="logout()">Выйти</button>
   </div>
+
+  <div class="card" id="route-card">
+    <div id="route-status" class="hint">Маршрут не загружен — сканирование только по статусу</div>
+    <button class="btn-secondary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
+    <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Закрыть маршрут</button>
+  </div>
+
   <h1>Сканируйте штрихкод отгрузки</h1>
   <div id="reader"></div>
   <button class="btn-secondary" onclick="showManualInput()">Ввести номер вручную</button>
