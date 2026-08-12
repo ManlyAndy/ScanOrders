@@ -74,7 +74,7 @@ async function handleFind(url, auth) {
 
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}`, {
-    headers: { Authorization: auth, "Accept-Encoding": "identity" },
+    headers: { Authorization: auth},
   });
 
   if (res.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
