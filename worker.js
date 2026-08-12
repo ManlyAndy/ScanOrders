@@ -184,7 +184,7 @@ async function handleRouteGet(url, auth, env) {
 
   const date = (url.searchParams.get("date") || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
+    return json({ error: "Неверный формат даты, ожидается DD-MM-YYYY" }, 400);
   }
 
   const raw = await env.ROUTES.get(routeKey(date));
