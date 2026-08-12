@@ -3,7 +3,24 @@
  * ==========================================
  * Разворачивается на Cloudflare Workers (бесплатно). Не хранит и не логирует
  * логин/пароль — только пересылает их в МойСклад для каждого запроса.
- 
+ *
+ * ВАЖНО ДЛЯ БЕЗОПАСНОСТИ:
+ * Этот код разрешает делать со стороны приложения ТОЛЬКО эти действия:
+ *   1. Найти отгрузку по номеру (только чтение)
+ *   2. Сменить статус ОДНОЙ отгрузки на статус "отгружено"
+ *   3. Сохранить/прочитать список номеров маршрута на дату (в KV-хранилище)
+ * Никаких других действий (удаление, изменение цен, доступ к другим
+ * документам и т.д.) через этот прокси сделать нельзя — даже если кто-то
+ * получит ссылку на сам прокси. Все три действия требуют верный
+ * логин/пароль от МойСклад в заголовке Authorization.
+ *
+ * ВАЖНО: для работы маршрутных листов нужно один раз привязать KV-хранилище
+ * к этому Worker'у — см. README.md, раздел "Хранилище маршрутов".
+ * Название переменной привязки должно быть ровно: ROUTES
+ *
+ * Как задеплоить — см. README.md
+ */
+
 // Держите эти значения синхронно со значениями в config.js
 const STATUS_READY_NAME = "Собрано";
 const STATUS_SHIPPED_NAME = "Отгружено";
@@ -11,7 +28,7 @@ const STATUS_SHIPPED_NAME = "Отгружено";
 // После деплоя ОБЯЗАТЕЛЬНО замените "*" на адрес вашего GitHub Pages,
 // например "https://ваш-логин.github.io" — так прокси будет отвечать
 // только вашему приложению, а не любому сайту в интернете.
-const ALLOWED_ORIGIN = "https://manlyandy.github.io/ScanOrders/";
+const ALLOWED_ORIGIN = "*";
 
 const API_BASE = "https://api.moysklad.ru/api/remap/1.2";
 
@@ -30,8 +47,17 @@ function json(data, status = 200) {
   });
 }
 
+// Лёгкая проверка, что логин/пароль вообще валидны в МойСклад —
+// используется перед тем, как что-то писать в хранилище маршрутов.
+async function verifyAuth(auth) {
+  const res = await fetch(`${API_BASE}/entity/employee?limit=1`, {
+    headers: { Authorization: auth },
+  });
+  return res.ok;
+}
+
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -49,6 +75,12 @@ export default {
       }
       if (url.pathname === "/ship" && request.method === "POST") {
         return await handleShip(request, auth);
+      }
+      if (url.pathname === "/route" && request.method === "POST") {
+        return await handleRouteUpload(request, auth, env);
+      }
+      if (url.pathname === "/route" && request.method === "GET") {
+        return await handleRouteGet(url, auth, env);
       }
     } catch (e) {
       return json({ error: "Внутренняя ошибка", details: String(e) }, 500);
@@ -120,4 +152,73 @@ async function handleShip(request, auth) {
   if (!putRes.ok) return json({ error: "Не удалось сменить статус", status: putRes.status }, 502);
 
   return json({ ok: true });
+}
+
+// ---------- МАРШРУТНЫЕ ЛИСТЫ ----------
+
+function routeKey(date) {
+  return `route:${date}`; // date в формате YYYY-MM-DD
+}
+
+async function handleRouteUpload(request, auth, env) {
+  if (!env.ROUTES) {
+    return json({ error: "Хранилище маршрутов не подключено к Worker'у (см. README)" }, 500);
+  }
+
+  const ok = await verifyAuth(auth);
+  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
+
+  const body = await request.json();
+  const date = (body.date || "").trim();
+  const numbers = Array.isArray(body.numbers) ? body.numbers : [];
+  const label = (body.label || "").trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
+  }
+  if (!numbers.length) {
+    return json({ error: "Список номеров пуст" }, 400);
+  }
+
+  const key = routeKey(date);
+  const existingRaw = await env.ROUTES.get(key);
+  const existing = existingRaw ? JSON.parse(existingRaw) : { date, items: [] };
+
+  const byNumber = new Map(existing.items.map((it) => [it.number, it]));
+  for (const n of numbers) {
+    const num = String(n).trim();
+    if (!num) continue;
+    byNumber.set(num, { number: num, label: label || (byNumber.get(num) || {}).label || "" });
+  }
+
+  const updated = { date, items: Array.from(byNumber.values()), updatedAt: new Date().toISOString() };
+  await env.ROUTES.put(key, JSON.stringify(updated));
+
+  return json({ ok: true, date, count: updated.items.length });
+}
+
+async function handleRouteGet(url, auth, env) {
+  if (!env.ROUTES) {
+    return json({ error: "Хранилище маршрутов не подключено к Worker'у (см. README)" }, 500);
+  }
+
+  const ok = await verifyAuth(auth);
+  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
+
+  const date = (url.searchParams.get("date") || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
+  }
+
+  const raw = await env.ROUTES.get(routeKey(date));
+  if (!raw) return json({ found: false, date });
+
+  const data = JSON.parse(raw);
+  return json({
+    found: true,
+    date,
+    updatedAt: data.updatedAt,
+    numbers: data.items.map((it) => it.number),
+    items: data.items,
+  });
 }
