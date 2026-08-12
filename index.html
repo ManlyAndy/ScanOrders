@@ -104,9 +104,9 @@
 
 <!-- ЭКРАН 1: ВХОД -->
 <div id="screen-login" class="screen active">
-  <h1>Вход — Контроль отгрузок</h1>
+  <h1>Вход — Список отгрузок</h1>
   <p class="hint" style="margin-bottom:16px; text-align:left;">
-    Введите ваш обычный логин и пароль от МойСклад. Они сохранятся только на этом телефоне.
+    Введите логин и пароль от МойСклад.
   </p>
   <input id="login-user" type="text" placeholder="Логин (email) в МойСклад" autocomplete="username">
   <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
@@ -122,7 +122,7 @@
   </div>
 
   <div class="card" id="route-card">
-    <div id="route-status" class="hint">Маршрут не загружен — сканирование только по статусу</div>
+    <div id="route-status" class="hint">Маршрут не загружен</div>
     <button class="btn-secondary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
     <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Закрыть маршрут</button>
   </div>
