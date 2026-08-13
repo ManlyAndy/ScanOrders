@@ -245,7 +245,14 @@ function startScanner() {
 
 function stopScanner() {
   if (html5QrCode) {
-    html5QrCode.stop().catch(() => {});
+    try {
+      const result = html5QrCode.stop();
+      if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+      }
+    } catch (e) {
+      // Сканер не был запущен (например, камера недоступна) — это нормально, просто игнорируем
+    }
     html5QrCode = null;
   }
 }
@@ -330,7 +337,7 @@ function renderWrongStatus(data) {
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
       <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-      <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
+      <p class="meta">заказ ещё не в статусе "Собрано"</p>
     </div>`;
 }
 
@@ -340,7 +347,7 @@ function renderAlreadyShipped(data) {
       <div class="badge bad">УЖЕ ОТГРУЖЕНО</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p>
+      <p class="meta">заказ уже был отсканирован</p>
     </div>`;
 }
 
@@ -350,7 +357,7 @@ function renderNotInRoute(data) {
       <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Заказ собран, но его нет в загруженном маршруте "${escapeHtml(currentRoute.type)}". Проверьте тип маршрута или сам заказ.</p>
+      <p class="meta">Заказ собран, но нет в маршруте "${escapeHtml(currentRoute.type)}". Проверьте тип маршрута или сам заказ.</p>
     </div>`;
 }
 
