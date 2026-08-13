@@ -4,14 +4,24 @@
 
 let html5QrCode = null;
 let currentResult = null;
-let currentRoute = null; // { date, numbers: [...], scanned: Set }
+let currentRoute = null; // { date, type, numbers: [...], scanned: Set }
+let selectedRouteType = "МСК";
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function routeStorageKey() {
-  return "sklad_route_" + todayStr();
+function routeStorageKey(type) {
+  return "sklad_route_" + todayStr() + "_" + (type || selectedRouteType);
+}
+
+function selectRouteType(type) {
+  selectedRouteType = type;
+  document.getElementById("type-btn-МСК").classList.toggle("active", type === "МСК");
+  document.getElementById("type-btn-ТК").classList.toggle("active", type === "ТК");
+  // При смене типа подхватываем то, что уже было загружено для него ранее (если было)
+  currentRoute = loadRouteFromStorage();
+  renderRouteStatus();
 }
 
 function loadRouteFromStorage() {
@@ -19,7 +29,7 @@ function loadRouteFromStorage() {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw);
-    return { date: data.date, numbers: data.numbers, scanned: new Set(data.scanned || []) };
+    return { date: data.date, type: data.type, numbers: data.numbers, scanned: new Set(data.scanned || []) };
   } catch (e) {
     return null;
   }
@@ -28,9 +38,10 @@ function loadRouteFromStorage() {
 function saveRouteToStorage() {
   if (!currentRoute) return;
   localStorage.setItem(
-    routeStorageKey(),
+    routeStorageKey(currentRoute.type),
     JSON.stringify({
       date: currentRoute.date,
+      type: currentRoute.type,
       numbers: currentRoute.numbers,
       scanned: Array.from(currentRoute.scanned),
     })
@@ -40,13 +51,51 @@ function saveRouteToStorage() {
 function renderRouteStatus() {
   const el = document.getElementById("route-status");
   const clearBtn = document.getElementById("clear-route-btn");
+  const listBtn = document.getElementById("show-list-btn");
   if (!currentRoute) {
-    el.textContent = "Маршрут не загружен";
+    el.textContent = `Маршрут "${selectedRouteType}" не загружен — сканирование только по статусу`;
     clearBtn.style.display = "none";
+    listBtn.style.display = "none";
     return;
   }
-  el.textContent = `Маршрут на ${currentRoute.date}: отсканировано ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+  el.textContent = `Маршрут "${currentRoute.type}" на ${currentRoute.date}: отсканировано ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
   clearBtn.style.display = "inline-block";
+  listBtn.style.display = "block";
+  renderModalList();
+}
+
+function openRouteModal() {
+  if (!currentRoute) return;
+  document.getElementById("modal-title").textContent =
+    `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+  renderModalList();
+  document.getElementById("route-modal").classList.add("active");
+}
+
+function closeRouteModal() {
+  document.getElementById("route-modal").classList.remove("active");
+}
+
+function renderModalList() {
+  if (!currentRoute) return;
+  const listEl = document.getElementById("modal-list");
+  const sorted = [...currentRoute.numbers].sort((a, b) => {
+    const aScanned = currentRoute.scanned.has(a);
+    const bScanned = currentRoute.scanned.has(b);
+    if (aScanned === bScanned) return a.localeCompare(b, undefined, { numeric: true });
+    return aScanned ? 1 : -1; // несканированные — сверху
+  });
+  listEl.innerHTML = sorted
+    .map((num) => {
+      const scanned = currentRoute.scanned.has(num);
+      return `<div class="modal-row ${scanned ? "scanned" : ""}">
+        <span>№ ${escapeHtml(num)}</span>
+        <span class="check">${scanned ? "✓" : ""}</span>
+      </div>`;
+    })
+    .join("");
+  const titleEl = document.getElementById("modal-title");
+  if (titleEl) titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
 }
 
 async function loadRoute() {
@@ -63,7 +112,17 @@ async function loadRoute() {
       return;
     }
 
-    currentRoute = { date: data.date, numbers: data.numbers, scanned: new Set() };
+    // Берём только те номера, у которых метка совпадает с выбранным типом (МСК / ТК)
+    const filteredNumbers = (data.items || [])
+      .filter((it) => it.label === selectedRouteType)
+      .map((it) => it.number);
+
+    if (!filteredNumbers.length) {
+      el.textContent = `На сегодня нет загруженного маршрута типа "${selectedRouteType}"`;
+      return;
+    }
+
+    currentRoute = { date: data.date, type: selectedRouteType, numbers: filteredNumbers, scanned: new Set() };
     saveRouteToStorage();
     renderRouteStatus();
   } catch (e) {
@@ -72,8 +131,8 @@ async function loadRoute() {
 }
 
 function clearRoute() {
+  if (currentRoute) localStorage.removeItem(routeStorageKey(currentRoute.type));
   currentRoute = null;
-  localStorage.removeItem(routeStorageKey());
   renderRouteStatus();
 }
 
@@ -108,7 +167,7 @@ async function doLogin() {
   errEl.textContent = "";
 
   if (!login || !pass) {
-    errEl.textContent = "логин и пароль";
+    errEl.textContent = "Заполните логин и пароль";
     return;
   }
 
@@ -260,7 +319,7 @@ function renderNotFound(code) {
     <div class="card bad">
       <div class="badge bad">НЕ НАЙДЕНО</div>
       <div class="num">№ ${escapeHtml(code)}</div>
-      <p class="meta">Отгрузка с таким номером не найдена</p>
+      <p class="meta">Отгрузка с таким номером не найдена. Это может быть чужой или неверный штрихкод.</p>
     </div>`;
 }
 
@@ -271,7 +330,7 @@ function renderWrongStatus(data) {
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
       <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-      <p class="meta">Этот заказ ещё не в статусе "Собрано"</p>
+      <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
     </div>`;
 }
 
@@ -281,7 +340,7 @@ function renderAlreadyShipped(data) {
       <div class="badge bad">УЖЕ ОТГРУЖЕНО</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Этот заказ уже был отсканирован</p>
+      <p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p>
     </div>`;
 }
 
@@ -291,7 +350,7 @@ function renderNotInRoute(data) {
       <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Заказ собран, но его нет в загруженном сегодняшнем маршруте</p>
+      <p class="meta">Заказ собран, но его нет в загруженном маршруте "${escapeHtml(currentRoute.type)}". Проверьте тип маршрута или сам заказ.</p>
     </div>`;
 }
 
