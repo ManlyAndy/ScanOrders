@@ -28,7 +28,7 @@ const STATUS_SHIPPED_NAME = "Отгружено";
 // После деплоя ОБЯЗАТЕЛЬНО замените "*" на адрес вашего GitHub Pages,
 // например "https://ваш-логин.github.io" — так прокси будет отвечать
 // только вашему приложению, а не любому сайту в интернете.
-const ALLOWED_ORIGIN = "https://manlyandy.github.io";
+const ALLOWED_ORIGIN = "*";
 
 const API_BASE = "https://api.moysklad.ru/api/remap/1.2";
 
@@ -97,7 +97,7 @@ async function handleFind(url, auth) {
 
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}`, {
-    headers: { Authorization: auth},
+    headers: { Authorization: auth },
   });
 
   if (res.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
@@ -174,10 +174,10 @@ async function handleRouteUpload(request, auth, env) {
   const label = (body.label || "").trim();
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return json({ error: "Неверный формат даты, ожидается DD-MM-YYYY" }, 400);
+    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
   }
   if (!numbers.length) {
-    return json({ error: "Список пуст" }, 400);
+    return json({ error: "Список номеров пуст" }, 400);
   }
 
   const key = routeKey(date);
@@ -207,7 +207,7 @@ async function handleRouteGet(url, auth, env) {
 
   const date = (url.searchParams.get("date") || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return json({ error: "Неверный формат даты, ожидается DD-MM-YYYY" }, 400);
+    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
   }
 
   const raw = await env.ROUTES.get(routeKey(date));
