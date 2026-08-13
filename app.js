@@ -131,7 +131,14 @@ async function loadRoute() {
 }
 
 function clearRoute() {
-  if (currentRoute) localStorage.removeItem(routeStorageKey(currentRoute.type));
+  if (!currentRoute) return;
+  const ok = confirm(
+    `Сбросить список "${currentRoute.type}" на этом телефоне?\n\n` +
+    `Это НЕ меняет никакие статусы в МойСклад — только очищает список на устройстве. ` +
+    `Чтобы переключиться на другой маршрут, можно просто нажать МСК/ТК — списки хранятся отдельно.`
+  );
+  if (!ok) return;
+  localStorage.removeItem(routeStorageKey(currentRoute.type));
   currentRoute = null;
   renderRouteStatus();
 }
@@ -209,7 +216,7 @@ function enterScanScreen() {
   currentRoute = loadRouteFromStorage();
   renderRouteStatus();
   show("scan");
-  startScanner();
+  setTimeout(startScanner, 300); // даём камере время освободиться после предыдущего сеанса
 }
 
 // ---------- СКАНЕР ----------
@@ -222,7 +229,7 @@ function startScanner() {
   Html5Qrcode.getCameras()
     .then((cameras) => {
       if (!cameras || !cameras.length) {
-        readerEl.innerHTML = '<p class="error">Камера не найдена</p>';
+        showCameraError(readerEl, "Камера не найдена");
         return;
       }
       // Предпочитаем заднюю камеру
@@ -235,12 +242,22 @@ function startScanner() {
           () => {} // ошибки отдельных кадров игнорируем
         )
         .catch(() => {
-          readerEl.innerHTML = '<p class="error">Не удалось запустить камеру. Разрешите доступ к камере в браузере.</p>';
+          showCameraError(readerEl, "Не удалось запустить камеру. Разрешите доступ к камере в браузере.");
         });
     })
     .catch(() => {
-      readerEl.innerHTML = '<p class="error">Нет доступа к камере</p>';
+      showCameraError(readerEl, "Нет доступа к камере");
     });
+}
+
+function showCameraError(readerEl, message) {
+  readerEl.innerHTML = `<p class="error">${escapeHtml(message)}</p>
+    <button class="btn-secondary" onclick="retryCamera()">Попробовать снова</button>`;
+}
+
+function retryCamera() {
+  stopScanner();
+  setTimeout(startScanner, 300); // небольшая пауза, чтобы камера успела освободиться
 }
 
 function stopScanner() {
@@ -288,10 +305,15 @@ async function lookupCode(code) {
   body.innerHTML = '<div class="spinner"></div><p class="hint">Ищу отгрузку ' + escapeHtml(code) + '…</p>';
 
   const auth = getSavedAuth();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
   try {
     const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(code)}`, {
       headers: { Authorization: auth },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (res.status === 401) {
       logout();
@@ -317,7 +339,12 @@ async function lookupCode(code) {
       renderReady(data);
     }
   } catch (e) {
-    body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Не удалось связаться с сервером. Проверьте интернет.</p></div>';
+    clearTimeout(timeoutId);
+    if (e.name === "AbortError") {
+      body.innerHTML = '<div class="card bad"><div class="badge bad">ДОЛГИЙ ОТВЕТ</div><p>Сервер МойСклад отвечает дольше 15 секунд. Возможно, сработало ограничение по количеству запросов в вашем тарифе МойСклад — подождите немного и попробуйте снова.</p></div>';
+    } else {
+      body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Не удалось связаться с сервером. Проверьте интернет.</p></div>';
+    }
   }
 }
 
@@ -337,7 +364,7 @@ function renderWrongStatus(data) {
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
       <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-      <p class="meta">заказ ещё не в статусе "Собрано"</p>
+      <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
     </div>`;
 }
 
@@ -347,7 +374,7 @@ function renderAlreadyShipped(data) {
       <div class="badge bad">УЖЕ ОТГРУЖЕНО</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">заказ уже был отсканирован</p>
+      <p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p>
     </div>`;
 }
 
@@ -357,7 +384,7 @@ function renderNotInRoute(data) {
       <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
       <div class="num">№ ${escapeHtml(data.name)}</div>
       <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-      <p class="meta">Заказ собран, но нет в маршруте "${escapeHtml(currentRoute.type)}". Проверьте тип маршрута или сам заказ.</p>
+      <p class="meta">Заказ собран, но его нет в загруженном маршруте "${escapeHtml(currentRoute.type)}". Проверьте тип маршрута или сам заказ.</p>
     </div>`;
 }
 
