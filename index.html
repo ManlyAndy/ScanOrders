@@ -98,15 +98,72 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .hint { font-size: 13px; color: #9ca3af; text-align: center; margin-top: 8px; }
+
+  .type-toggle { display: flex; gap: 8px; margin: 10px 0; }
+  .type-btn {
+    flex: 1; margin-bottom: 0; padding: 10px; border-radius: 8px;
+    border: 1px solid #374151; background: #111827; color: #9ca3af;
+    font-size: 14px; font-weight: 600;
+  }
+  .type-btn.active { background: #2563eb; color: white; border-color: #2563eb; }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal-box {
+    background: #1f2937;
+    width: 100%;
+    max-width: 480px;
+    max-height: 80vh;
+    border-radius: 16px 16px 0 0;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 700;
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .modal-list {
+    overflow-y: auto;
+    flex: 1;
+    margin-bottom: 12px;
+  }
+  .modal-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    background: #111827;
+    font-size: 15px;
+  }
+  .modal-row.scanned {
+    background: #14532d;
+    color: #86efac;
+  }
+  .modal-row .check { font-weight: 700; }
 </style>
 </head>
 <body>
 
 <!-- ЭКРАН 1: ВХОД -->
 <div id="screen-login" class="screen active">
-  <h1>Вход — Список отгрузок</h1>
+  <h1>Вход — Контроль отгрузок</h1>
   <p class="hint" style="margin-bottom:16px; text-align:left;">
-    Введите логин и пароль от МойСклад.
+    Введите ваш обычный логин и пароль от МойСклад. Они сохранятся только на этом телефоне.
   </p>
   <input id="login-user" type="text" placeholder="Логин (email) в МойСклад" autocomplete="username">
   <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
@@ -122,9 +179,26 @@
   </div>
 
   <div class="card" id="route-card">
-    <div id="route-status" class="hint">Маршрут не загружен</div>
+    <div id="route-status" class="hint">Маршрут не загружен — сканирование только по статусу</div>
+    <div class="type-toggle">
+      <button class="type-btn active" id="type-btn-МСК" onclick="selectRouteType('МСК')">МСК</button>
+      <button class="type-btn" id="type-btn-ТК" onclick="selectRouteType('ТК')">ТК</button>
+    </div>
     <button class="btn-secondary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
+    <button class="btn-secondary" id="show-list-btn" style="display:none;" onclick="openRouteModal()">Показать список</button>
     <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Закрыть маршрут</button>
+  </div>
+
+  <!-- Модальное окно со списком отгрузок маршрута -->
+  <div id="route-modal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span id="modal-title">Список маршрута</span>
+        <button class="link-btn" onclick="closeRouteModal()">Закрыть окно</button>
+      </div>
+      <div id="modal-list" class="modal-list"></div>
+      <button class="link-btn" onclick="clearRoute(); closeRouteModal();">Закрыть маршрут</button>
+    </div>
   </div>
 
   <h1>Сканируйте штрихкод отгрузки</h1>
