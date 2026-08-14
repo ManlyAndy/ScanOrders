@@ -163,7 +163,7 @@
 <div id="screen-login" class="screen active">
   <h1>Вход — Контроль отгрузок</h1>
   <p class="hint" style="margin-bottom:16px; text-align:left;">
-    Введите ваш обычный логин и пароль от МойСклад. Они сохранятся только на этом телефоне.
+    Введите ваш обычный логин и пароль от МойСклад. Повторный вход не потребуется до следующего рабочего дня (после 07:00). Данные сохраняются только на этом телефоне.
   </p>
   <input id="login-user" type="text" placeholder="Логин (email) в МойСклад" autocomplete="username">
   <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
@@ -180,13 +180,15 @@
 
   <div class="card" id="route-card">
     <div id="route-status" class="hint">Маршрут не загружен — сканирование только по статусу</div>
+    <p class="hint" style="margin-top:-4px; margin-bottom:10px;">Кнопки МСК/ТК переключают списки. В маршруте сканирование только отмечает отгрузки; статус меняется после «Закрыть маршрут».</p>
     <div class="type-toggle">
       <button class="type-btn active" id="type-btn-МСК" onclick="selectRouteType('МСК')">МСК</button>
       <button class="type-btn" id="type-btn-ТК" onclick="selectRouteType('ТК')">ТК</button>
     </div>
     <button class="btn-secondary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
     <button class="btn-secondary" id="show-list-btn" style="display:none;" onclick="openRouteModal()">Показать список</button>
-    <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Закрыть маршрут</button>
+    <button class="btn-success" id="close-route-btn" style="display:none;" onclick="closeRoute()">Закрыть маршрут</button>
+    <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Сбросить список (только на этом телефоне)</button>
   </div>
 
   <!-- Модальное окно со списком отгрузок маршрута -->
@@ -197,7 +199,7 @@
         <button class="link-btn" onclick="closeRouteModal()">Закрыть окно</button>
       </div>
       <div id="modal-list" class="modal-list"></div>
-      <button class="link-btn" onclick="clearRoute(); closeRouteModal();">Закрыть маршрут</button>
+      <button class="link-btn" onclick="clearRoute(); closeRouteModal();">Сбросить список (только на этом телефоне)</button>
     </div>
   </div>
 
