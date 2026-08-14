@@ -17,3 +17,4 @@ const CONFIG = {
   STATUS_SHIPPED_NAME: "Отгружено",
 
 };
+ 
