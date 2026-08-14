@@ -7,8 +7,33 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 let parsedNumbers = [];
 
+function getBusinessDayKey(date = new Date()) {
+  const d = new Date(date);
+  if (d.getHours() < 7) d.setDate(d.getDate() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function logout() {
+  localStorage.removeItem("sklad_auth");
+  localStorage.removeItem("sklad_user");
+  localStorage.removeItem("sklad_auth_day");
+  document.getElementById("screen-main").style.display = "none";
+  document.getElementById("screen-login").style.display = "block";
+}
+
 function getSavedAuth() {
-  return localStorage.getItem("sklad_auth");
+  const auth = localStorage.getItem("sklad_auth");
+  const sessionDay = localStorage.getItem("sklad_auth_day");
+  if (!auth || !sessionDay || sessionDay !== getBusinessDayKey()) {
+    localStorage.removeItem("sklad_auth");
+    localStorage.removeItem("sklad_user");
+    localStorage.removeItem("sklad_auth_day");
+    return null;
+  }
+  return auth;
 }
 
 window.addEventListener("load", () => {
@@ -31,7 +56,8 @@ async function doLogin() {
   }
 
   const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
 
   try {
     // Лёгкая проверка логина — читаем (возможно, пустой) маршрут за сегодня
@@ -48,6 +74,8 @@ async function doLogin() {
   }
 
   localStorage.setItem("sklad_auth", authHeader);
+  localStorage.setItem("sklad_user", login);
+  localStorage.setItem("sklad_auth_day", getBusinessDayKey());
   document.getElementById("screen-login").style.display = "none";
   document.getElementById("screen-main").style.display = "block";
 }
@@ -116,10 +144,12 @@ async function sendRoute() {
       headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
       body: JSON.stringify({ date, label, numbers: parsedNumbers }),
     });
+    if (res.status === 401) { logout(); return; }
     const data = await res.json();
 
     if (data.ok) {
-      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут на ${date} сохранён, всего в нём: ${data.count} отгрузок. Контролёр может нажать "Загрузить маршрут" в своём приложении.</p>`;
+      const label = document.getElementById("route-label").value;
+      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён, всего в нём: ${data.count} отгрузок (это общее число по всем типам на эту дату). Контролёр может выбрать тип "${label}" и нажать "Загрузить маршрут" в своём приложении.</p>`;
     } else {
       resultEl.innerHTML = `<p class="error">${data.error || "Не удалось отправить маршрут"}</p>`;
     }
