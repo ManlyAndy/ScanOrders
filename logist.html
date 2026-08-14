@@ -38,13 +38,19 @@
 </div>
 
 <div id="screen-main" style="display:none;">
-  <h1>Загрузка маршрута</h1>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+    <h1 style="margin-bottom:14px;">Загрузка маршрута</h1>
+    <button class="link-btn" style="width:auto;background:none;color:#93c5fd;text-decoration:underline;padding:4px;margin-bottom:10px;" onclick="logout()">Выйти</button>
+  </div>
 
   <label>Дата отгрузки</label>
   <input id="route-date" type="date">
 
-  <label>Метка (необязательно, например транспортная компания)</label>
-  <input id="route-label" type="text" placeholder="напр. ТК Мейджик Транс">
+  <label>Тип маршрута</label>
+  <select id="route-label">
+    <option value="МСК">МСК</option>
+    <option value="ТК">ТК</option>
+  </select>
 
   <label>PDF со списком отгрузок (из печати в МойСклад)</label>
   <input id="pdf-file" type="file" accept="application/pdf">
