@@ -2,6 +2,10 @@
 // предложил "Установить приложение" и запускал его в отдельном окне без
 // адресной строки. Данные (логин, статусы) он не кэширует — приложение
 // всегда работает с актуальными данными из МойСклад через прокси.
+//
+// Стратегия "сначала сеть, кэш — только как запасной вариант при отсутствии
+// интернета". Это специально изменено после случая, когда старая закэшированная
+// версия config.js мешала обновлениям доходить до телефона.
 
 const CACHE_NAME = "sklad-scanner-shell-v7";
 const SHELL_FILES = [
@@ -29,13 +33,20 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Только "оболочка" приложения идёт из кэша (чтобы быстро открывалось).
-// Все запросы к API/прокси НИКОГДА не кэшируются — всегда идут в сеть.
+// Только "оболочка" приложения вообще проходит через кэш. Все запросы к
+// прокси/МойСклад не трогаем — они всегда идут напрямую в сеть.
 self.addEventListener("fetch", (event) => {
   const isShellFile = SHELL_FILES.some((f) => event.request.url.includes(f.replace("./", "")));
-  if (!isShellFile) return; // не трогаем запросы к прокси/МойСклад
+  if (!isShellFile) return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((fresh) => {
+        // Обновляем кэш свежей версией на будущее (на случай если пропадёт интернет)
+        const clone = fresh.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        return fresh;
+      })
+      .catch(() => caches.match(event.request)) // сеть недоступна — берём то, что есть в кэше
   );
 });
