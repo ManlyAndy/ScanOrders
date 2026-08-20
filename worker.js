@@ -318,11 +318,12 @@ function routeKey(date) {
   return `route:${date}`; // date в формате YYYY-MM-DD
 }
 
-/*async function handleRouteUpload(request, auth, env) {
-  if (!canUploadRoute(auth, env)) {
-    return json({ error: "У вас нет права загружать или изменять маршруты" }, 403);
-  }
-*/
+async function handleRouteUpload(request, auth, env) {
+  // ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ТЕСТА:
+  // if (!canUploadRoute(auth, env)) {
+  //   return json({ error: "У вас нет права загружать или изменять маршруты" }, 403);
+  // }
+
   if (!env.ROUTES) {
     return json({ error: "Хранилище маршрутов не подключено к Worker'у (см. README)" }, 500);
   }
