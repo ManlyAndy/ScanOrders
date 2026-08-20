@@ -145,7 +145,7 @@ async function handleFind(url, auth) {
   if (!row) return json({ found: false });
 
   // Получаем полную отгрузку, чтобы точно получить статус
-  const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}`, {
+  const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state`, {
     headers: { Authorization: auth },
   });
 
