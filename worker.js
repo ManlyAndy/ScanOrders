@@ -144,16 +144,26 @@ async function handleFind(url, auth) {
 
   if (!row) return json({ found: false });
 
-  const stateName = row.state ? row.state.name : null;
-  const places = extractPlaces(row);
+  // Получаем полную отгрузку, чтобы точно получить статус
+  const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}`, {
+    headers: { Authorization: auth },
+  });
+
+  if (!detailRes.ok) {
+    return json({ error: "Не удалось получить данные отгрузки", status: detailRes.status }, 502);
+  }
+
+  const detail = await detailRes.json();
+  const stateName = detail.state ? detail.state.name : null;
+  const places = extractPlaces(detail);
 
   return json({
     found: true,
-    id: row.id,
-    name: row.name,
-    agentName: row.agent ? row.agent.name : "—",
-    sum: row.sum ? (row.sum / 100).toFixed(2) : "—",
-    positionsCount: row.positions && row.positions.meta ? row.positions.meta.size : "—",
+    id: detail.id,
+    name: detail.name,
+    agentName: detail.agent ? detail.agent.name : "—",
+    sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
+    positionsCount: detail.positions && detail.positions.meta ? detail.positions.meta.size : "—",
     places,
     stateName: stateName,
     ready: stateName === STATUS_READY_NAME,
