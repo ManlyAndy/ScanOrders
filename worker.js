@@ -384,4 +384,3 @@ async function handleRouteGet(url, auth, env) {
     items: data.items,
   });
 }
-
