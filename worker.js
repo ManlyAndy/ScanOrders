@@ -131,7 +131,7 @@ async function handleFind(url, auth) {
   if (!code) return json({ error: "Не передан номер" }, 400);
 
   const filter = encodeURIComponent(`name=${code}`);
-  const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}`, {
+  const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state`, {
     headers: { Authorization: auth },
     cf: { cacheTtl: 0, cacheEverything: false },
   });
@@ -140,30 +140,20 @@ async function handleFind(url, auth) {
   if (!res.ok) return json({ error: "Ошибка МойСклад", status: res.status }, 502);
 
   const data = await res.json();
- const row = data.rows && data.rows[0];
+  const row = data.rows && data.rows[0];
 
   if (!row) return json({ found: false });
 
-  // Получаем полную отгрузку, чтобы точно получить статус
-  const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}`, {
-    headers: { Authorization: auth },
-  });
-
-  if (!detailRes.ok) {
-    return json({ error: "Не удалось получить данные отгрузки", status: detailRes.status }, 502);
-  }
-
-  const detail = await detailRes.json();
-  const stateName = detail.state ? detail.state.name : null;
-  const places = extractPlaces(detail);
+  const stateName = row.state ? row.state.name : null;
+  const places = extractPlaces(row);
 
   return json({
     found: true,
-    id: detail.id,
-    name: detail.name,
-    agentName: detail.agent ? detail.agent.name : "—",
-    sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
-    positionsCount: detail.positions && detail.positions.meta ? detail.positions.meta.size : "—",
+    id: row.id,
+    name: row.name,
+    agentName: row.agent ? row.agent.name : "—",
+    sum: row.sum ? (row.sum / 100).toFixed(2) : "—",
+    positionsCount: row.positions && row.positions.meta ? row.positions.meta.size : "—",
     places,
     stateName: stateName,
     ready: stateName === STATUS_READY_NAME,
@@ -195,7 +185,7 @@ async function handleShip(request, auth) {
 
   // Сначала перечитываем текущую отгрузку: между поиском и подтверждением
   // её статус мог измениться другим сотрудником.
-  const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
+  const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
     headers: { Authorization: auth },
     cf: { cacheTtl: 0, cacheEverything: false },
   });
@@ -263,7 +253,7 @@ async function handleFinish(request, auth) {
     }
 
     try {
-      const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
+      const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
         headers: { Authorization: auth },
         cf: { cacheTtl: 0, cacheEverything: false },
       });
