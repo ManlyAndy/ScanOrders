@@ -136,8 +136,14 @@ function renderModalList() {
       let mark = "";
       if (scanned) mark = "✓";
       else if (currentRoute.closedAt && info && info.error) mark = "⚠";
+      const errorLine = !scanned && currentRoute.closedAt && info && info.error
+        ? `<div class="error-detail">${escapeHtml(info.error)}</div>`
+        : "";
       return `<div class="modal-row ${scanned ? "scanned" : ""} ${!scanned && currentRoute.closedAt ? "problem" : ""}">
-        <span>№ ${escapeHtml(num)}</span>
+        <div>
+          <span>№ ${escapeHtml(num)}</span>
+          ${errorLine}
+        </div>
         <span class="check">${mark}</span>
       </div>`;
     })
