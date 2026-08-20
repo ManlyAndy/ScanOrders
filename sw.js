@@ -3,7 +3,7 @@
 // адресной строки. Данные (логин, статусы) он не кэширует — приложение
 // всегда работает с актуальными данными из МойСклад через прокси.
 
-const CACHE_NAME = "sklad-scanner-shell-v5";
+const CACHE_NAME = "sklad-scanner-shell-v6";
 const SHELL_FILES = [
   "./index.html",
   "./app.js",
