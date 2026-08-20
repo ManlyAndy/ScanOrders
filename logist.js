@@ -106,12 +106,19 @@ async function handleFile(e) {
     }
 
     // Номер отгрузки: число, за которым идёт "Да" или "Нет" и дата ДД.ММ.ГГГГ
-    const regex = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
-    const found = new Set();
-    let m;
-    while ((m = regex.exec(fullText)) !== null) {
-      found.add(m[1]);
-    }
+    const regex1 = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
+const regex2 = /Расходная\s+накладная\s+№\s*(\d{4,7})/gi;
+
+const found = new Set();
+let m;
+
+while ((m = regex1.exec(fullText)) !== null) {
+  found.add(m[1]);
+}
+
+while ((m = regex2.exec(fullText)) !== null) {
+  found.add(m[1]);
+}
 
     parsedNumbers = Array.from(found);
 
