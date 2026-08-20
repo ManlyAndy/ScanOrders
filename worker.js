@@ -51,7 +51,11 @@ function corsHeaders() {
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...corsHeaders() },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      ...corsHeaders(),
+    },
   });
 }
 
@@ -129,6 +133,7 @@ async function handleFind(url, auth) {
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}`, {
     headers: { Authorization: auth },
+    cf: { cacheTtl: 0, cacheEverything: false },
   });
 
   if (res.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
@@ -182,6 +187,7 @@ async function handleShip(request, auth) {
   // её статус мог измениться другим сотрудником.
   const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
     headers: { Authorization: auth },
+    cf: { cacheTtl: 0, cacheEverything: false },
   });
   if (demandRes.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
   if (!demandRes.ok) return json({ error: "Не удалось проверить отгрузку" }, 502);
@@ -249,6 +255,7 @@ async function handleFinish(request, auth) {
     try {
       const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
         headers: { Authorization: auth },
+        cf: { cacheTtl: 0, cacheEverything: false },
       });
 
       if (demandRes.status === 401) {
