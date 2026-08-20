@@ -140,7 +140,7 @@ async function handleFind(url, auth) {
   if (!res.ok) return json({ error: "Ошибка МойСклад", status: res.status }, 502);
 
   const data = await res.json();
-  const row = data.rows && data.rows[0];
+    const row = data.rows && data.rows[0];
 
   if (!row) return json({ found: false });
 
@@ -308,9 +308,28 @@ async function handleFinish(request, auth) {
       if (putRes.status === 401) {
         results.push({ id, name: actualName, ok: false, error: "Неверный логин или пароль" });
       } else if (!putRes.ok) {
-        results.push({ id, name: actualName, ok: false, error: "Не удалось сменить статус", status: putRes.status });
+        let details = "";
+        try { details = await putRes.text(); } catch (e) {}
+        results.push({ id, name: actualName, ok: false, error: "Не удалось сменить статус", status: putRes.status, details });
       } else {
-        results.push({ id, name: actualName, ok: true });
+        // Перечитываем документ ещё раз, чтобы убедиться, что статус ДЕЙСТВИТЕЛЬНО применился
+        const verifyRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
+          headers: { Authorization: auth },
+          cf: { cacheTtl: 0, cacheEverything: false },
+        });
+        const verifyData = verifyRes.ok ? await verifyRes.json() : null;
+        const verifiedState = verifyData && verifyData.state ? verifyData.state.name : null;
+        if (verifiedState === STATUS_SHIPPED_NAME) {
+          results.push({ id, name: actualName, ok: true });
+        } else {
+          results.push({
+            id,
+            name: actualName,
+            ok: false,
+            error: `Запрос прошёл успешно, но статус не изменился (сейчас: "${verifiedState || "—"}")`,
+            usedHref: shippedState.meta.href,
+          });
+        }
       }
     } catch (e) {
       results.push({ id, name, ok: false, error: "Ошибка соединения с МойСклад" });
