@@ -150,8 +150,9 @@ async function loadRoute() {
   const el = document.getElementById("route-status");
   el.textContent = "Загружаю маршрут…";
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${todayStr()}`, {
+    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${todayStr()}&_=${Date.now()}`, {
       headers: { Authorization: getSavedAuth() },
+      cache: "no-store",
     });
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
@@ -396,7 +397,7 @@ async function lookupCode(code) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(code)}`, { headers: { Authorization: auth }, signal: controller.signal });
+    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(code)}&_=${Date.now()}`, { headers: { Authorization: auth }, signal: controller.signal, cache: "no-store" });
     clearTimeout(timeoutId);
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
@@ -478,4 +479,3 @@ window.addEventListener("load", () => {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   if (getSavedAuth()) enterScanScreen(); else show("login");
 });
-
