@@ -502,7 +502,7 @@ async function loadPhotoInto(elId, number) {
     if (data.found && data.url) {
       el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; margin-top:8px;" onclick="window.open('${data.url}','_blank')">`;
     } else {
-      el.innerHTML = '<p class="hint">Фото не найдено в Bitrix24</p>';
+      el.innerHTML = renderPhotoDebug(data);
     }
   } catch (e) {
     el.innerHTML = '<p class="hint">Не удалось загрузить фото</p>';
@@ -511,6 +511,23 @@ async function loadPhotoInto(elId, number) {
 function renderReady(data) {
   document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div><div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div><p class="meta">Это индивидуальная отгрузка. После подтверждения статус изменится в МойСклад.</p></div><div id="photo-block" class="card"><p class="hint">Загружаю фото…</p></div><button class="btn-success" onclick="confirmShip()">Подтвердить отгрузку</button>`;
   loadPhoto(data.name);
+}
+
+function renderPhotoDebug(data) {
+  let html = '<p class="hint">Фото не найдено в Bitrix24</p>';
+  if (data.debug) {
+    html += `<p class="hint">Просмотрено публикаций: ${data.debug.totalPostsSeen}</p>`;
+    if (data.debug.sample && data.debug.sample.length) {
+      html += '<div style="font-size:12px; color:#9ca3af; text-align:left; margin-top:6px;">Примеры найденных постов:<br>';
+      data.debug.sample.forEach((s) => {
+        html += `— текст: "${escapeHtml(s.detailText || s.title || "")}" | файл: ${s.hasFiles ? "есть" : "нет"} | дата: ${escapeHtml(s.date || "")}<br>`;
+      });
+      html += "</div>";
+    } else {
+      html += '<p class="hint" style="color:#fca5a5;">Публикаций не найдено вообще — вебхук, скорее всего, не видит эту группу (тот, от чьего имени создан вебхук, не состоит в ней).</p>';
+    }
+  }
+  return html;
 }
 
 async function loadPhoto(number) {
@@ -526,7 +543,7 @@ async function loadPhoto(number) {
     if (data.found && data.url) {
       el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; display:block;" onclick="window.open('${data.url}','_blank')">`;
     } else {
-      el.innerHTML = '<p class="hint">Фото не найдено в Bitrix24</p>';
+      el.innerHTML = renderPhotoDebug(data);
     }
   } catch (e) {
     if (el.isConnected) el.innerHTML = '<p class="hint">Не удалось загрузить фото</p>';
