@@ -462,10 +462,29 @@ async function handlePhoto(url, auth, env) {
     }
 
     const posts = postsData.result || [];
-    const match = posts.find((p) => (p.DETAIL_TEXT || "").trim() === number);
+
+    const stripTags = (s) => (s || "").replace(/<[^>]*>/g, "").trim();
+    const match = posts.find((p) => {
+      const detail = stripTags(p.DETAIL_TEXT);
+      const title = stripTags(p.TITLE);
+      return detail === number || title === number;
+    });
 
     if (!match || !match.FILES || !match.FILES.length) {
-      return json({ found: false });
+      // Отладка: показываем, что реально пришло от Bitrix24, чтобы понять,
+      // почему не нашлось совпадение (не видит группу? текст в другом поле?).
+      return json({
+        found: false,
+        debug: {
+          totalPostsSeen: posts.length,
+          sample: posts.slice(0, 8).map((p) => ({
+            title: stripTags(p.TITLE),
+            detailText: stripTags(p.DETAIL_TEXT),
+            hasFiles: !!(p.FILES && p.FILES.length),
+            date: p.DATE_CREATE,
+          })),
+        },
+      });
     }
 
     const fileId = match.FILES[0];
