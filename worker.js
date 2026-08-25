@@ -589,25 +589,46 @@ async function handlePhoto(url, auth, env) {
     //    Если в сообщении несколько фото — возвращаем все.
     // =========================================================
 
-    const images = chatFiles
-      .filter((file) => {
-        const type = String(file.type || "").toLowerCase();
-        const extension = String(file.extension || "").toLowerCase();
+    const imageFiles = chatFiles.filter((file) => {
+      const type = String(file.type || "").toLowerCase();
+      const extension = String(file.extension || "").toLowerCase();
+      return type === "image" ||
+        ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension);
+    });
 
-        return type === "image" ||
-          ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension);
-      })
-      .map((file) => ({
+    // Ссылки urlShow/urlDownload из сообщения чата требуют, чтобы человек был
+    // залогинен в Bitrix24 в браузере — вне сессии они не открываются.
+    // Получаем через Диск публичную ссылку, которая работает без входа.
+    const images = [];
+    for (const file of imageFiles) {
+      let publicUrl = null;
+      try {
+        const diskRes = await fetch(`${webhook}/disk.file.get.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: file.id }),
+        });
+        if (diskRes.ok) {
+          const diskData = await diskRes.json();
+          if (diskData.result) {
+            publicUrl = diskData.result.DOWNLOAD_URL || diskData.result.DETAIL_URL || null;
+          }
+        }
+      } catch (e) {
+        // если не получилось — попробуем запасной вариант ниже
+      }
+
+      images.push({
         id: file.id,
         name: file.name || `photo-${file.id}`,
-        url: file.urlShow || file.urlPreview || file.urlDownload || null,
-        downloadUrl: file.urlDownload || file.urlShow || null,
-        previewUrl: file.urlPreview || file.urlShow || null,
+        url: publicUrl || file.urlShow || file.urlPreview || file.urlDownload || null,
         type: file.type || "image",
-      }))
-      .filter((file) => !!file.url);
+      });
+    }
 
-    if (!images.length) {
+    const validImages = images.filter((f) => !!f.url);
+
+    if (!validImages.length) {
       return json({
         found: false,
         chatId: BITRIX_CHAT_ID,
@@ -641,8 +662,8 @@ async function handlePhoto(url, auth, env) {
       number,
       messageId,
       messageText: message.text || "",
-      url: images[0].url,
-      images,
+      url: validImages[0].url,
+      images: validImages,
     });
 
   } catch (e) {
