@@ -563,10 +563,10 @@ async function handlePhoto(url, auth, env) {
     //    к нашему чату и ищем файлы рядом с сообщением
     // =========================================================
 
-    const chatFiles = files.filter((file) => {
-      return Number(file.chatId) === BITRIX_CHAT_ID ||
-             Number(file.imChatId) === BITRIX_CHAT_ID;
-    });
+    // Запрос im.dialog.messages.get уже ограничен нужным диалогом (DIALOG_ID),
+    // поэтому дополнительная фильтрация файлов по chatId избыточна и рискованна
+    // (если поле называется иначе, чем ожидалось — список файлов молча обнулится).
+    const chatFiles = files;
 
     if (!chatFiles.length) {
       return json({
