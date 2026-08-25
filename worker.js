@@ -433,7 +433,7 @@ async function handleRouteGet(url, auth, env) {
 async function handlePhoto(url, auth, env) {
   if (!env.BITRIX_WEBHOOK_URL) {
     return json({
-      error: "Интеграция с Bitrix24 не настроена (нет секрета BITRIX_WEBHOOK_URL в Worker'е)"
+      error: "Интеграция с Bitrix24 не настроена"
     }, 500);
   }
 
@@ -448,27 +448,25 @@ async function handlePhoto(url, auth, env) {
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
 
   try {
-    // =========================================================
-    // 1. Ищем сообщение ТОЛЬКО в чате фотографий отгрузок
-    // =========================================================
-
-    const searchRes = await fetch(`${webhook}/im.dialog.messages.search.json`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        CHAT_ID: BITRIX_CHAT_ID,
-        SEARCH_MESSAGE: number,
-        ORDER: { ID: "DESC" },
-        LIMIT: 50,
-      }),
-    });
+    // Ищем номер ТОЛЬКО в нужном чате.
+    const searchRes = await fetch(
+      `${webhook}/im.dialog.messages.search.json`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          CHAT_ID: BITRIX_CHAT_ID,
+          SEARCH_MESSAGE: number,
+          ORDER: { ID: "DESC" },
+          LIMIT: 20,
+        }),
+      }
+    );
 
     if (!searchRes.ok) {
-      const details = await searchRes.text().catch(() => "");
       return json({
         error: "Bitrix24 недоступен при поиске сообщения",
         status: searchRes.status,
-        details
       }, 502);
     }
 
@@ -476,20 +474,33 @@ async function handlePhoto(url, auth, env) {
 
     if (searchData.error) {
       return json({
-        error: `Ошибка Bitrix24: ${searchData.error_description || searchData.error}`
+        error: `Ошибка Bitrix24: ${
+          searchData.error_description || searchData.error
+        }`
       }, 502);
     }
 
     const result = searchData.result || {};
-    const messages = Array.isArray(result.messages) ? result.messages : [];
 
-    // Ищем сообщение, в котором действительно присутствует номер.
+    const messages = Array.isArray(result.messages)
+      ? result.messages
+      : [];
+
+    // ВАЖНО:
+    // files здесь принадлежат найденным сообщениям.
+    const files = Array.isArray(result.files)
+      ? result.files
+      : [];
+
     const normalizedNumber = number.toLowerCase();
 
     const matchingMessages = messages.filter((message) => {
       const text = String(message.text || "").trim().toLowerCase();
-      return text === normalizedNumber ||
-             text.includes(normalizedNumber);
+
+      return (
+        text === normalizedNumber ||
+        text.includes(normalizedNumber)
+      );
     });
 
     if (!matchingMessages.length) {
@@ -500,170 +511,116 @@ async function handlePhoto(url, auth, env) {
         number,
         debug: {
           messagesFound: messages.length,
-          sample: messages.slice(0, 10).map((m) => ({
+          messages: messages.slice(0, 10).map((m) => ({
             id: m.id,
             text: m.text,
-            date: m.date,
-            chatId: m.chatId || m.chat_id,
+            date: m.date
           }))
         }
       });
     }
 
-    // Берём самое свежее подходящее сообщение.
+    // Берём конкретное найденное сообщение.
     const message = matchingMessages[0];
 
-    // =========================================================
-    // 2. Получаем историю конкретного чата около найденного
-    //    сообщения, чтобы получить связанные files
-    // =========================================================
+    // Если Bitrix вернул идентификатор сообщения у файла —
+    // дополнительно фильтруем по нему.
+    let messageFiles = files.filter((file) => {
+      const fileMessageId =
+        file.messageId ??
+        file.message_id ??
+        file.MESSAGE_ID ??
+        null;
 
-    const messageId = Number(message.id);
-
-    const historyRes = await fetch(`${webhook}/im.dialog.messages.get.json`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        DIALOG_ID: BITRIX_DIALOG_ID,
-        FIRST_ID: messageId,
-        LIMIT: 50,
-      }),
+      return fileMessageId == null ||
+             Number(fileMessageId) === Number(message.id);
     });
 
-    if (!historyRes.ok) {
-      const details = await historyRes.text().catch(() => "");
-      return json({
-        error: "Не удалось получить сообщения чата Bitrix24",
-        status: historyRes.status,
-        details
-      }, 502);
-    }
-
-    const historyData = await historyRes.json();
-
-    if (historyData.error) {
-      return json({
-        error: `Ошибка Bitrix24 при получении истории: ${
-          historyData.error_description || historyData.error
-        }`
-      }, 502);
-    }
-
-    const history = historyData.result || {};
-    const historyMessages = Array.isArray(history.messages)
-      ? history.messages
-      : [];
-
-    const files = Array.isArray(history.files)
-      ? history.files
-      : [];
-
-    // =========================================================
-    // 3. Проверяем, что история действительно относится
-    //    к нашему чату и ищем файлы рядом с сообщением
-    // =========================================================
-
-    // Запрос im.dialog.messages.get уже ограничен нужным диалогом (DIALOG_ID),
-    // поэтому дополнительная фильтрация файлов по chatId избыточна и рискованна
-    // (если поле называется иначе, чем ожидалось — список файлов молча обнулится).
-    const chatFiles = files;
-
-    if (!chatFiles.length) {
-      return json({
-        found: false,
-        chatId: BITRIX_CHAT_ID,
-        dialogId: BITRIX_DIALOG_ID,
-        number,
-        messageId,
-        debug: {
-          messageText: message.text || "",
-          historyMessages: historyMessages.length,
-          filesInResponse: files.length,
-          chatFiles: 0,
-        }
-      });
-    }
-
-    // =========================================================
-    // 4. Берём изображения.
-    //    Если в сообщении несколько фото — возвращаем все.
-    // =========================================================
-
-    const imageFiles = chatFiles.filter((file) => {
+    // Оставляем только изображения.
+    const imageFiles = messageFiles.filter((file) => {
       const type = String(file.type || "").toLowerCase();
       const extension = String(file.extension || "").toLowerCase();
-      return type === "image" ||
-        ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension);
+
+      return (
+        type === "image" ||
+        ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension)
+      );
     });
 
-    // Ссылки urlShow/urlDownload из сообщения чата требуют, чтобы человек был
-    // залогинен в Bitrix24 в браузере — вне сессии они не открываются.
-    // Получаем через Диск публичную ссылку, которая работает без входа.
+    // Получаем рабочие ссылки через Disk.
     const images = [];
+
     for (const file of imageFiles) {
       let publicUrl = null;
+
       try {
-        const diskRes = await fetch(`${webhook}/disk.file.get.json`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: file.id }),
-        });
+        const diskRes = await fetch(
+          `${webhook}/disk.file.get.json`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: file.id }),
+          }
+        );
+
         if (diskRes.ok) {
           const diskData = await diskRes.json();
+
           if (diskData.result) {
-            publicUrl = diskData.result.DOWNLOAD_URL || diskData.result.DETAIL_URL || null;
+            publicUrl =
+              diskData.result.DOWNLOAD_URL ||
+              diskData.result.DETAIL_URL ||
+              null;
           }
         }
-      } catch (e) {
-        // если не получилось — попробуем запасной вариант ниже
-      }
+      } catch (e) {}
 
-      images.push({
-        id: file.id,
-        name: file.name || `photo-${file.id}`,
-        url: publicUrl || file.urlShow || file.urlPreview || file.urlDownload || null,
-        type: file.type || "image",
-      });
+      const finalUrl =
+        publicUrl ||
+        file.urlShow ||
+        file.urlPreview ||
+        file.urlDownload ||
+        null;
+
+      if (finalUrl) {
+        images.push({
+          id: file.id,
+          name: file.name || `photo-${file.id}`,
+          url: finalUrl,
+          type: file.type || "image",
+        });
+      }
     }
 
-    const validImages = images.filter((f) => !!f.url);
-
-    if (!validImages.length) {
+    if (!images.length) {
       return json({
         found: false,
         chatId: BITRIX_CHAT_ID,
         dialogId: BITRIX_DIALOG_ID,
         number,
-        messageId,
+        messageId: message.id,
+        messageText: message.text || "",
         debug: {
-          messageText: message.text || "",
-          totalFiles: chatFiles.length,
-          files: chatFiles.map((f) => ({
+          filesFromSearch: files.length,
+          files: files.map((f) => ({
             id: f.id,
             name: f.name,
             type: f.type,
-            extension: f.extension,
-            urlShow: !!f.urlShow,
-            urlDownload: !!f.urlDownload,
+            extension: f.extension
           }))
         }
       });
     }
-
-    // =========================================================
-    // 5. Возвращаем и первый URL для совместимости,
-    //    и массив images для дальнейшего вывода нескольких фото.
-    // =========================================================
 
     return json({
       found: true,
       chatId: BITRIX_CHAT_ID,
       dialogId: BITRIX_DIALOG_ID,
       number,
-      messageId,
+      messageId: message.id,
       messageText: message.text || "",
-      url: validImages[0].url,
-      images: validImages,
+      url: images[0].url,
+      images,
     });
 
   } catch (e) {
