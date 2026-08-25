@@ -168,8 +168,13 @@
   }
   .modal-list {
     overflow-y: auto;
+    overflow-x: auto;
     flex: 1;
     margin-bottom: 12px;
+    column-width: 150px;
+    column-gap: 8px;
+    column-fill: auto;
+    max-height: 480px; /* примерно 10 строк на колонку при высоте строки ~46px */
   }
   .modal-row {
     display: flex;
@@ -180,6 +185,7 @@
     margin-bottom: 6px;
     background: #111827;
     font-size: 15px;
+    break-inside: avoid;
   }
   .modal-row.scanned {
     background: #14532d;
