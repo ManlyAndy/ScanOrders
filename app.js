@@ -139,12 +139,12 @@ function renderModalList() {
       const errorLine = !scanned && currentRoute.closedAt && info && info.error
         ? `<div class="error-detail">${escapeHtml(info.error)}</div>`
         : "";
-      return `<div class="modal-row ${scanned ? "scanned" : ""} ${!scanned && currentRoute.closedAt ? "problem" : ""}">
+      return `<div class="modal-row ${scanned ? "scanned" : ""} ${!scanned && currentRoute.closedAt ? "problem" : ""}" onclick="openOrderDetail('${escapeHtml(num)}')" style="cursor:pointer;">
         <div>
           <span>№ ${escapeHtml(num)}</span>
           ${errorLine}
         </div>
-        <span class="check">${mark}</span>
+        <span class="check">${mark} ›</span>
       </div>`;
     })
     .join("");
@@ -450,10 +450,87 @@ function markRouteScanned(data) {
   currentRoute.scannedItems[data.name] = { id: data.id, name: data.name, places: data.places };
   saveRouteToStorage();
   renderRouteStatus();
-  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ПРОВЕРЕНО ✓</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><p class="meta">Отгрузка есть в маршруте и отмечена. Статус в МойСклад пока не менялся.</p></div>`;
+  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ПРОВЕРЕНО ✓</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><p class="meta">Отгрузка есть в маршруте и отмечена. Статус в МойСклад пока не менялся.</p></div><div id="photo-block" class="card"><p class="hint">Загружаю фото…</p></div>`;
+  loadPhoto(data.name);
+}
+async function openOrderDetail(number) {
+  const listEl = document.getElementById("modal-list");
+  const titleEl = document.getElementById("modal-title");
+  if (titleEl) titleEl.textContent = `Заказ № ${number}`;
+  listEl.innerHTML = '<div class="spinner"></div><p class="hint">Загружаю…</p>';
+
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(number)}&_=${Date.now()}`, {
+      headers: { Authorization: getSavedAuth() },
+      cache: "no-store",
+    });
+    const data = await res.json();
+
+    if (!data.found) {
+      listEl.innerHTML = `<p class="error">Заказ № ${escapeHtml(number)} не найден.</p>
+        <button class="link-btn" onclick="renderModalList(); document.getElementById('modal-title').textContent='Список маршрута';">← Назад к списку</button>`;
+      return;
+    }
+
+    listEl.innerHTML = `
+      <div class="card">
+        <div class="num">№ ${escapeHtml(data.name)}</div>
+        <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
+        <div class="meta">Статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
+        <div class="meta">Позиций: <b>${escapeHtml(String(data.positionsCount))}</b></div>
+        <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
+      </div>
+      <button class="btn-secondary" onclick="loadPhotoInto('photo-slot-${escapeHtml(data.name)}', '${escapeHtml(data.name)}')">Фото</button>
+      <div id="photo-slot-${escapeHtml(data.name)}"></div>
+      <button class="link-btn" onclick="renderModalList(); document.getElementById('modal-title').textContent='Список маршрута';">← Назад к списку</button>
+    `;
+  } catch (e) {
+    listEl.innerHTML = '<p class="error">Не удалось загрузить данные заказа.</p>';
+  }
+}
+
+async function loadPhotoInto(elId, number) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = '<p class="hint">Загружаю фото…</p>';
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}&_=${Date.now()}`, {
+      headers: { Authorization: getSavedAuth() },
+      cache: "no-store",
+    });
+    const data = await res.json();
+    if (data.found && data.url) {
+      el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; margin-top:8px;" onclick="window.open('${data.url}','_blank')">`;
+    } else {
+      el.innerHTML = '<p class="hint">Фото не найдено в Bitrix24</p>';
+    }
+  } catch (e) {
+    el.innerHTML = '<p class="hint">Не удалось загрузить фото</p>';
+  }
 }
 function renderReady(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div><div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div><p class="meta">Это индивидуальная отгрузка. После подтверждения статус изменится в МойСклад.</p></div><button class="btn-success" onclick="confirmShip()">Подтвердить отгрузку</button>`;
+  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div><div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div><p class="meta">Это индивидуальная отгрузка. После подтверждения статус изменится в МойСклад.</p></div><div id="photo-block" class="card"><p class="hint">Загружаю фото…</p></div><button class="btn-success" onclick="confirmShip()">Подтвердить отгрузку</button>`;
+  loadPhoto(data.name);
+}
+
+async function loadPhoto(number) {
+  const el = document.getElementById("photo-block");
+  if (!el) return;
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}&_=${Date.now()}`, {
+      headers: { Authorization: getSavedAuth() },
+      cache: "no-store",
+    });
+    const data = await res.json();
+    if (!el.isConnected) return; // экран уже сменился, пока грузилось фото
+    if (data.found && data.url) {
+      el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; display:block;" onclick="window.open('${data.url}','_blank')">`;
+    } else {
+      el.innerHTML = '<p class="hint">Фото не найдено в Bitrix24</p>';
+    }
+  } catch (e) {
+    if (el.isConnected) el.innerHTML = '<p class="hint">Не удалось загрузить фото</p>';
+  }
 }
 
 async function confirmShip() {
