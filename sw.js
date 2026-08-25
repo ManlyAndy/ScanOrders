@@ -7,7 +7,7 @@
 // интернета". Это специально изменено после случая, когда старая закэшированная
 // версия config.js мешала обновлениям доходить до телефона.
 
-const CACHE_NAME = "sklad-scanner-shell-v8";
+const CACHE_NAME = "sklad-scanner-shell-v9";
 const SHELL_FILES = [
   "./index.html",
   "./app.js",
