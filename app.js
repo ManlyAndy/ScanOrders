@@ -515,17 +515,17 @@ function renderReady(data) {
 
 function renderPhotoDebug(data) {
   let html = '<p class="hint">Фото не найдено в Bitrix24</p>';
-  if (data.debug) {
-    html += `<p class="hint">Просмотрено публикаций: ${data.debug.totalPostsSeen}</p>`;
-    if (data.debug.sample && data.debug.sample.length) {
-      html += '<div style="font-size:12px; color:#9ca3af; text-align:left; margin-top:6px;">Примеры найденных постов:<br>';
-      data.debug.sample.forEach((s) => {
-        html += `— текст: "${escapeHtml(s.detailText || s.title || "")}" | файл: ${s.hasFiles ? "есть" : "нет"} | дата: ${escapeHtml(s.date || "")}<br>`;
-      });
-      html += "</div>";
-    } else {
-      html += '<p class="hint" style="color:#fca5a5;">Публикаций не найдено вообще — вебхук, скорее всего, не видит эту группу (тот, от чьего имени создан вебхук, не состоит в ней).</p>';
-    }
+  if (data.error) {
+    html += `<p class="hint" style="color:#fca5a5;">Ошибка: ${escapeHtml(data.error)}</p>`;
+  }
+  // Показываем ВСЁ, что прислал сервер, кроме уже показанных found/error —
+  // формат отладки в worker.js может меняться, тут не гадаем про поля.
+  const rest = Object.assign({}, data);
+  delete rest.found;
+  delete rest.error;
+  delete rest.url;
+  if (Object.keys(rest).length) {
+    html += `<pre style="font-size:11px; color:#9ca3af; text-align:left; white-space:pre-wrap; word-break:break-all; margin-top:8px; max-height:300px; overflow:auto;">${escapeHtml(JSON.stringify(rest, null, 2))}</pre>`;
   }
   return html;
 }
