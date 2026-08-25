@@ -117,6 +117,9 @@ export default {
       if (url.pathname === "/route" && request.method === "GET") {
         return await handleRouteGet(url, auth, env);
       }
+      if (url.pathname === "/photo" && request.method === "GET") {
+        return await handlePhoto(url, auth, env);
+      }
     } catch (e) {
       return json({ error: "Внутренняя ошибка", details: String(e) }, 500);
     }
@@ -413,4 +416,77 @@ async function handleRouteGet(url, auth, env) {
     numbers: data.items.map((it) => it.number),
     items: data.items,
   });
+}
+
+// ---------- ФОТО ОТГРУЗКИ ИЗ BITRIX24 ----------
+//
+// Требует ОДНОГО секрета в Cloudflare (Settings → Variables and Secrets):
+//   BITRIX_WEBHOOK_URL — входящий вебхук, напр. https://портал.bitrix24.ru/rest/1/xxxxxxx/
+//
+// Логика: ищем в Ленте новостей (среди всего, что видно этому вебхуку) пост,
+// текст которого точно совпадает с номером отгрузки, берём первый
+// прикреплённый файл и получаем прямую ссылку на него через disk.file.get.
+
+async function handlePhoto(url, auth, env) {
+  if (!env.BITRIX_WEBHOOK_URL) {
+    return json({ error: "Интеграция с Bitrix24 не настроена (нет секрета BITRIX_WEBHOOK_URL в Worker'е)" }, 500);
+  }
+
+  const ok = await verifyAuth(auth);
+  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
+
+  const number = (url.searchParams.get("number") || "").trim();
+  if (!number) return json({ error: "Не передан номер отгрузки" }, 400);
+
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+
+  try {
+    // Ищем последние посты (до 200 за раз, окно поиска — последние ~45 дней,
+    // чтобы не перебирать всю историю и не упереться в лимиты).
+    const dateFrom = new Date();
+    dateFrom.setDate(dateFrom.getDate() - 45);
+
+    const postsRes = await fetch(`${webhook}/log.blogpost.get.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        LOG_DATE_FROM: dateFrom.toISOString(),
+        LIMIT: 200,
+      }),
+    });
+
+    if (!postsRes.ok) return json({ error: "Bitrix24 недоступен", status: postsRes.status }, 502);
+    const postsData = await postsRes.json();
+    if (postsData.error) {
+      return json({ error: `Ошибка Bitrix24: ${postsData.error_description || postsData.error}` }, 502);
+    }
+
+    const posts = postsData.result || [];
+    const match = posts.find((p) => (p.DETAIL_TEXT || "").trim() === number);
+
+    if (!match || !match.FILES || !match.FILES.length) {
+      return json({ found: false });
+    }
+
+    const fileId = match.FILES[0];
+
+    const fileRes = await fetch(`${webhook}/disk.file.get.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: fileId }),
+    });
+
+    if (!fileRes.ok) return json({ error: "Не удалось получить файл из Bitrix24" }, 502);
+    const fileData = await fileRes.json();
+    if (fileData.error || !fileData.result) {
+      return json({ error: `Ошибка получения файла: ${fileData.error_description || fileData.error}` }, 502);
+    }
+
+    const downloadUrl = fileData.result.DOWNLOAD_URL || fileData.result.DETAIL_URL;
+    if (!downloadUrl) return json({ found: false });
+
+    return json({ found: true, url: downloadUrl });
+  } catch (e) {
+    return json({ error: "Не удалось связаться с Bitrix24", details: String(e) }, 500);
+  }
 }
