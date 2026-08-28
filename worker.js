@@ -1,25 +1,15 @@
 /**
  * ПРОКСИ ДЛЯ ПРИЛОЖЕНИЯ "КОНТРОЛЬ ОТГРУЗОК"
  * ==========================================
- * Разворачивается на Cloudflare Workers (бесплатно). Не хранит и не логирует
+ * Разворачивается на Cloudflare Workers. Не хранит и не логирует
  * логин/пароль — только пересылает их в МойСклад для каждого запроса.
  *
  * ВАЖНО ДЛЯ БЕЗОПАСНОСТИ:
  * Этот код разрешает делать со стороны приложения ТОЛЬКО эти действия:
  *   1. Найти отгрузку по номеру (только чтение)
- *   2. Сменить статус ОДНОЙ отгрузки на статус "отгружено"
- *   3. Закрыть маршрут: пакетно сменить статусы просканированных отгрузок
+ *   2. Сменить статус одной отгрузки на статус "отгружено"
+ *   3. Закрыть маршрут: массово сменить статусы просканированных отгрузок
  *   4. Сохранить/прочитать список номеров маршрута на дату (в KV-хранилище)
- * Никаких других действий (удаление, изменение цен, доступ к другим
- * документам и т.д.) через этот прокси сделать нельзя — даже если кто-то
- * получит ссылку на сам прокси. Все три действия требуют верный
- * логин/пароль от МойСклад в заголовке Authorization.
- *
- * ВАЖНО: для работы маршрутных листов нужно один раз привязать KV-хранилище
- * к этому Worker'у — см. README.md, раздел "Хранилище маршрутов".
- * Название переменной привязки должно быть ровно: ROUTES
- *
- * Как задеплоить — см. README.md
  */
 
 // Держите эти значения синхронно со значениями в config.js
@@ -30,16 +20,10 @@ const PLACES_FIELD_NAME = "Количество мест";
 const BITRIX_CHAT_ID = 11359;
 const BITRIX_DIALOG_ID = `chat${BITRIX_CHAT_ID}`;
 
-// После деплоя ОБЯЗАТЕЛЬНО замените "*" на адрес вашего GitHub Pages,
-// например "https://ваш-логин.github.io" — так прокси будет отвечать
-// только вашему приложению, а не любому сайту в интернете.
 const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 
 // Логины МойСклад, которым разрешено ЗАГРУЖАТЬ/ОБНОВЛЯТЬ маршруты.
-// Передайте их в Cloudflare Worker как переменную окружения:
 // ROUTE_UPLOAD_LOGINS=login1@company.ru,login2@company.ru,logist@company.ru
-// Все остальные пользователи могут сканировать, закрывать маршруты и
-// выполнять индивидуальную отгрузку, но POST /route будет запрещён.
 
 const API_BASE = "https://api.moysklad.ru/api/remap/1.2";
 
@@ -62,8 +46,7 @@ function json(data, status = 200) {
   });
 }
 
-// Лёгкая проверка, что логин/пароль вообще валидны в МойСклад —
-// используется перед тем, как что-то писать в хранилище маршрутов.
+
 function getAuthUsername(auth) {
   try {
     if (!auth || !auth.startsWith("Basic ")) return "";
@@ -127,7 +110,7 @@ export default {
       return json({ error: "Внутренняя ошибка", details: String(e) }, 500);
     }
 
-    // Всё остальное запрещено намеренно
+    
     return json({ error: "Действие не разрешено" }, 403);
   },
 };
@@ -150,7 +133,7 @@ async function handleFind(url, auth) {
 
   if (!row) return json({ found: false });
 
-  // Получаем полную отгрузку, чтобы точно получить статус
+ 
   const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state`, {
     headers: { Authorization: auth },
   });
@@ -199,8 +182,7 @@ async function handleShip(request, auth) {
   const id = body.id;
   if (!id) return json({ error: "Не передан id отгрузки" }, 400);
 
-  // Сначала перечитываем текущую отгрузку: между поиском и подтверждением
-  // её статус мог измениться другим сотрудником.
+ 
   const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
     headers: { Authorization: auth },
     cf: { cacheTtl: 0, cacheEverything: false },
@@ -214,7 +196,7 @@ async function handleShip(request, auth) {
     return json({ error: `Статус уже изменился: сейчас "${currentState || "—"}"`, stateName: currentState }, 409);
   }
 
-  // 1. Находим href нужного статуса в метаданных
+  
   const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, {
     headers: { Authorization: auth },
   });
@@ -225,7 +207,7 @@ async function handleShip(request, auth) {
     return json({ error: `Статус "${STATUS_SHIPPED_NAME}" не найден в аккаунте` }, 500);
   }
 
-  // 2. Меняем статус именно этой (и только этой) отгрузки
+  
   const putRes = await fetch(`${API_BASE}/entity/demand/${id}`, {
     method: "PUT",
     headers: { Authorization: auth, "Content-Type": "application/json" },
@@ -245,7 +227,7 @@ async function handleFinish(request, auth) {
   const items = Array.isArray(body.items) ? body.items : [];
   if (!items.length) return json({ error: "Нет просканированных отгрузок" }, 400);
 
-  // Получаем метаданные статусов один раз на весь маршрут.
+  .
   const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, {
     headers: { Authorization: auth },
   });
@@ -257,9 +239,7 @@ async function handleFinish(request, auth) {
 
   const results = [];
 
-  // Обрабатываем каждую просканированную отгрузку отдельно.
-  // Перед PUT обязательно перечитываем её статус: за время маршрута заказ
-  // мог быть изменён в МойСклад другим сотрудником.
+  
   for (const rawItem of items) {
     const id = String(rawItem.id || "").trim();
     const name = String(rawItem.name || "").trim();
@@ -318,7 +298,7 @@ async function handleFinish(request, auth) {
         try { details = await putRes.text(); } catch (e) {}
         results.push({ id, name: actualName, ok: false, error: "Не удалось сменить статус", status: putRes.status, details });
       } else {
-        // Перечитываем документ ещё раз, чтобы убедиться, что статус ДЕЙСТВИТЕЛЬНО применился
+    
         const verifyRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
           headers: { Authorization: auth },
           cf: { cacheTtl: 0, cacheEverything: false },
@@ -354,10 +334,6 @@ function routeKey(date) {
 }
 
 async function handleRouteUpload(request, auth, env) {
-  // ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ТЕСТА:
-  // if (!canUploadRoute(auth, env)) {
-  //   return json({ error: "У вас нет права загружать или изменять маршруты" }, 403);
-  // }
 
   if (!env.ROUTES) {
     return json({ error: "Хранилище маршрутов не подключено к Worker'у (см. README)" }, 500);
@@ -421,14 +397,7 @@ async function handleRouteGet(url, auth, env) {
   });
 }
 
-// ---------- ФОТО ОТГРУЗКИ ИЗ BITRIX24 ----------
-//
-// Требует ОДНОГО секрета в Cloudflare (Settings → Variables and Secrets):
-//   BITRIX_WEBHOOK_URL — входящий вебхук, напр. https://портал.bitrix24.ru/rest/1/xxxxxxx/
-//
-// Логика: ищем в Ленте новостей (среди всего, что видно этому вебхуку) пост,
-// текст которого точно совпадает с номером отгрузки, берём первый
-// прикреплённый файл и получаем прямую ссылку на него через disk.file.get.
+
 
 async function handlePhoto(url, auth, env) {
   if (!env.BITRIX_WEBHOOK_URL) {
@@ -448,7 +417,7 @@ async function handlePhoto(url, auth, env) {
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
 
   try {
-    // Ищем номер ТОЛЬКО в нужном чате.
+
     const searchRes = await fetch(
       `${webhook}/im.dialog.messages.search.json`,
       {
@@ -486,8 +455,7 @@ async function handlePhoto(url, auth, env) {
       ? result.messages
       : [];
 
-    // ВАЖНО:
-    // files здесь принадлежат найденным сообщениям.
+    
     const files = Array.isArray(result.files)
       ? result.files
       : [];
@@ -520,11 +488,10 @@ async function handlePhoto(url, auth, env) {
       });
     }
 
-    // Берём конкретное найденное сообщение.
+    
     const message = matchingMessages[0];
 
-    // Если Bitrix вернул идентификатор сообщения у файла —
-    // дополнительно фильтруем по нему.
+    
     let messageFiles = files.filter((file) => {
       const fileMessageId =
         file.messageId ??
@@ -536,7 +503,7 @@ async function handlePhoto(url, auth, env) {
              Number(fileMessageId) === Number(message.id);
     });
 
-    // Оставляем только изображения.
+    
     const imageFiles = messageFiles.filter((file) => {
       const type = String(file.type || "").toLowerCase();
       const extension = String(file.extension || "").toLowerCase();
@@ -547,7 +514,7 @@ async function handlePhoto(url, auth, env) {
       );
     });
 
-    // Получаем рабочие ссылки через Disk.
+    
     const images = [];
 
     for (const file of imageFiles) {
