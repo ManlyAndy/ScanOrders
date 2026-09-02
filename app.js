@@ -1,271 +1,72 @@
-function getSavedAuth() {
-  const token = localStorage.getItem("sklad_session");
-  return token ? `Bearer ${token}` : null;
+let scanner = null;
+let currentOrder = null;
+let groupOrders = [];
+let photoFiles = [];
+let photoBusy = false;
+
+function $(id){return document.getElementById(id)}
+function esc(v){const d=document.createElement("div");d.textContent=v==null?"":String(v);return d.innerHTML}
+function sessionExpiresAt(){return Number(localStorage.getItem("collected_expires_at")||0)}
+function sessionIsValid(){return !!auth()&&sessionExpiresAt()>Date.now()}
+function auth(){return localStorage.getItem("collected_session")}
+function user(){return localStorage.getItem("collected_user")||""}
+function show(name){["login","scan","result"].forEach(x=>$(`screen-${x}`).classList.remove("active"));$(`screen-${name}`).classList.add("active")}
+function stopScanner(){if(scanner){try{scanner.stop().catch(()=>{})}catch(e){}scanner=null}}
+function startScanner(){stopScanner();$("reader").innerHTML="";scanner=new Html5Qrcode("reader");Html5Qrcode.getCameras().then(cameras=>{if(!cameras.length){$("reader").innerHTML='<p class="error">Камера не найдена.</p>';return}const cam=cameras.find(c=>/back|rear|environment/i.test(c.label))||cameras[0];scanner.start(cam.id,{fps:10,qrbox:{width:270,height:150},formatsToSupport:[Html5QrcodeSupportedFormats.CODE_128]},text=>{stopScanner();lookup(text.trim())},()=>{}).catch(()=>{$("reader").innerHTML='<p class="error">Не удалось открыть камеру. Разрешите доступ к камере.</p><button class="btn-secondary" onclick="startScanner()">Повторить</button>'})}).catch(()=>{$("reader").innerHTML='<p class="error">Нет доступа к камере.</p>'})}
+function enterScan(){$("who-label").textContent=user();$("who-label-2").textContent=user();show("scan");setTimeout(startScanner,250)}
+function showManual(){$("manual").classList.toggle("hidden")}
+function manualLookup(){const v=$("manual-code").value.trim();if(v){stopScanner();lookup(v)}}
+function backToScan(){$("manual").classList.add("hidden");$("manual-code").value="";show("scan");setTimeout(startScanner,150)}
+async function doLogin(){
+  const login=$("login-user").value.trim(),pass=$("login-pass").value,err=$("login-error");
+  err.textContent="";
+  if(!login||!pass){err.textContent="Заполните логин и пароль";return}
+  const h="Basic "+btoa(unescape(encodeURIComponent(login+":"+pass)));
+  try{
+    const r=await fetch(`${CONFIG.PROXY_URL}/login`,{method:"POST",headers:{Authorization:h},cache:"no-store"});
+    const d=await r.json().catch(()=>({}));
+    if(r.status===401){err.textContent=d.error||"Неверный логин или пароль";return}
+    if(r.status===403){err.textContent=d.error||"Доступ к приложению запрещён";return}
+    if(!r.ok||!d.token){err.textContent=d.error||"Не удалось связаться с сервером";return}
+    localStorage.setItem("collected_session",d.token);
+    localStorage.setItem("collected_user",login);
+    localStorage.setItem("collected_expires_at",String(d.expiresAt||Date.now()+Number(d.expiresIn||0)*1000));
+    $("login-pass").value="";
+    enterScan();
+  }catch(e){err.textContent="Нет соединения с сервером"}
+}
+function logout(){
+  ["collected_session","collected_user","collected_expires_at"].forEach(k=>localStorage.removeItem(k));
+  stopScanner();currentOrder=null;groupOrders=[];show("login");
 }
 
-function getSavedUser() { return localStorage.getItem("sklad_user") || ""; }
+async function lookup(code){show("result");$("result-body").innerHTML='<div class="spinner"></div><p class="hint" style="text-align:center">Ищу отгрузку '+esc(code)+'…</p>';try{const r=await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(code)}&_=${Date.now()}`,{headers:{Authorization:"Bearer "+auth()},cache:"no-store"});if(r.status===401){logout();return}const d=await r.json();if(!d.found){renderNotFound(code);return}currentOrder=d;if(d.alreadyCollected){renderCollected(d);return}if(!d.collectable){renderWrongStatus(d);return}if(groupOrders.some(x=>String(x.id)===String(d.id))){renderDuplicate(d);return}groupOrders.push(d);renderGroup()}catch(e){$("result-body").innerHTML='<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Не удалось связаться с сервером.</p></div>'}}
+function renderNotFound(code){$("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕ НАЙДЕНО</div><div class="num">№ ${esc(code)}</div><p class="meta">Отгрузка с таким номером не найдена.</p></div>`}
+function renderWrongStatus(d){$("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕ ГОТОВО</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Текущий статус: <b>${esc(d.stateName||"—")}</b></div><p class="meta">Для этого приложения допустимы статусы «${esc(CONFIG.STATUS_NOT_COLLECTED_NAME)}» и «${esc(CONFIG.STATUS_URGENT_NAME)}».</p>${groupOrders.length?'<button class="btn-secondary" onclick="renderGroup()">Вернуться к упаковке</button>':''}`}
+function pickersLabel(p1,p2){if(!p1)return "—";return p2?`${p1}, ${p2}`:p1}
+function renderCollected(d){$("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УЖЕ СОБРАНО ✓</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(d.pickerName1,d.pickerName2))}</b></div><div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div></div>${groupOrders.length?'<button class="btn-secondary" onclick="renderGroup()">Вернуться к упаковке</button>':''}`}
+function renderDuplicate(d){$("result-body").innerHTML=`<div class="card bad"><div class="badge bad">УЖЕ ДОБАВЛЕНА</div><div class="num">№ ${esc(d.name)}</div><p class="meta">Эта отгрузка уже находится в текущей упаковке.</p></div><button class="btn-success" onclick="renderGroup()">Вернуться к упаковке</button>`}
+function pickerChips(selected,targetId){return CONFIG.PICKER_NAMES.map(n=>`<button type="button" class="chip${n===selected?" chip-active":""}" onclick="selectPicker('${esc(n).replace(/'/g,"\\'")}','${targetId}')">${esc(n)}</button>`).join("")}
+function selectPicker(name,targetId){$(targetId).value=name;document.querySelectorAll(`#${targetId}-chips .chip`).forEach(c=>c.classList.toggle("chip-active",c.textContent===name))}
+function renderGroup(){if(!groupOrders.length){backToScan();return}const rows=groupOrders.map((d,i)=>`<div class="group-row"><div><div class="group-num">№ ${esc(d.name)}</div><div class="group-agent">${esc(d.agentName||"—")}</div></div><button class="remove-order" onclick="removeFromGroup(${i})" title="Убрать">×</button></div>`).join("");$("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УПАКОВКА · ${groupOrders.length} ${groupOrders.length===1?"ОТГРУЗКА":"ОТГРУЗКИ"}</div><div class="group-list">${rows}</div></div><button class="btn-primary add-order-btn" onclick="addOrderToGroup()">＋ Добавить отгрузку</button><button class="btn-success" onclick="openCollectModal()">Сменить статус всех</button><button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button><button class="link-btn" onclick="cancelGroup()">Отменить упаковку</button>`}
+function addOrderToGroup(){$("manual").classList.add("hidden");show("scan");setTimeout(startScanner,150)}
+function removeFromGroup(index){if(index<0||index>=groupOrders.length)return;groupOrders.splice(index,1);if(groupOrders.length)renderGroup();else backToScan()}
+function cancelGroup(){if(!confirm("Удалить все отгрузки из текущей упаковки?"))return;groupOrders=[];currentOrder=null;backToScan()}
 
-async function doLogin() {
-  const login = document.getElementById("login-user").value.trim();
-  const pass = document.getElementById("login-pass").value;
-  const errEl = document.getElementById("login-error");
-  errEl.textContent = "";
-  if (!login || !pass) { errEl.textContent = "Заполните логин и пароль"; return; }
-  const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/login`, { method: "POST", headers: { Authorization: authHeader } });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { errEl.textContent = data.error || "Не удалось войти"; return; }
-    localStorage.setItem("sklad_session", data.token);
-    localStorage.setItem("sklad_user", login);
-    enterScanScreen();
-  } catch {
-    errEl.textContent = "Нет соединения с сервером";
-  }
-}
+function openCollectModal(){if(!groupOrders.length)return;const first=groupOrders[0];const p1=first.pickerName1||"",p2=first.pickerName2||"",places=first.places==null?"":first.places;$("order-content").innerHTML=`<div class="num">Упаковка · ${groupOrders.length} ${groupOrders.length===1?"отгрузка":"отгрузки"}</div><div class="group-mini">${groupOrders.map(d=>`№ ${esc(d.name)}`).join(" · ")}</div><p class="meta">Эти значения будут записаны во все отгрузки упаковки.</p><label class="hint">Сборщик №1</label><input id="picker-input-1" type="text" placeholder="Впишите имя или выберите ниже" value="${esc(p1)}" autocomplete="off"><div id="picker-input-1-chips" class="chips">${pickerChips(p1,"picker-input-1")}</div><label class="hint">Сборщик №2 (необязательно)</label><input id="picker-input-2" type="text" placeholder="Впишите имя или выберите ниже" value="${esc(p2)}" autocomplete="off"><div id="picker-input-2-chips" class="chips">${pickerChips(p2,"picker-input-2")}</div><label class="hint">Количество мест</label><input id="places-input" type="number" min="1" step="1" inputmode="numeric" value="${esc(places)}" placeholder="Количество мест"><button class="btn-success" onclick="collectGroup()">Сменить статус всех</button>`;$("order-modal").classList.add("active")}
+function closeOrderModal(){$("order-modal").classList.remove("active")}
+async function collectGroup(){if(!groupOrders.length)return;const picker1=$("picker-input-1").value.trim(),picker2=$("picker-input-2").value.trim(),places=Number($("places-input").value);if(!picker1){alert("Впишите имя сборщика №1");return}if(!Number.isInteger(places)||places<1){alert("Укажите количество мест");return}const btn=document.querySelector("#order-content .btn-success");btn.disabled=true;btn.textContent="Сохраняю…";try{const r=await fetch(`${CONFIG.PROXY_URL}/collect-group`,{method:"POST",headers:{"Authorization":"Bearer "+auth(),"Content-Type":"application/json"},body:JSON.stringify({items:groupOrders.map(d=>({id:d.id,name:d.name})),picker1,picker2,places})});if(r.status===401){logout();return}const d=await r.json();if(!d.ok){alert(d.error||"Не удалось изменить статус");btn.disabled=false;btn.textContent="Сменить статус всех";return}groupOrders=groupOrders.map(order=>({...order,stateName:CONFIG.STATUS_COLLECTED_NAME,alreadyCollected:true,pickerName1:picker1,pickerName2:picker2||null,places}));currentOrder=groupOrders[groupOrders.length-1];closeOrderModal();$("result-body").innerHTML=`<div class="card ok"><div class="badge ok">СОБРАНО ✓</div><div class="num">${groupOrders.length} ${groupOrders.length===1?"отгрузка":"отгрузки"}</div><div class="group-mini">${groupOrders.map(d=>`№ ${esc(d.name)}`).join(" · ")}</div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(picker1,picker2))}</b></div><div class="meta">Количество мест: <b>${places}</b></div><p class="meta">Статус успешно изменён в МойСклад для всех отгрузок.</p></div><button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button><button class="btn-primary" onclick="finishPackage()">Готово</button>`}catch(e){alert("Нет соединения с сервером")}finally{btn.disabled=false;btn.textContent="Сменить статус всех"}}
+function finishPackage(){groupOrders=[];currentOrder=null;backToScan()}
 
-function logout() {
-  localStorage.removeItem("sklad_session");
-  localStorage.removeItem("sklad_user");
-  stopScanner();
-  show("login");
-}
-
-function enterScanScreen() {
-  document.getElementById("who-label").textContent = getSavedUser();
-  document.getElementById("who-label-2").textContent = getSavedUser();
-  currentRoute = loadRouteFromStorage();
-  renderRouteStatus();
-  show("scan");
-  setTimeout(startScanner, 300);
-}
-
-// ---------- СКАНЕР ----------
-
-function startScanner() {
-  const readerEl = document.getElementById("reader");
-  readerEl.innerHTML = "";
-  html5QrCode = new Html5Qrcode("reader");
-  Html5Qrcode.getCameras().then((cameras) => {
-    if (!cameras || !cameras.length) { showCameraError(readerEl, "Камера не найдена"); return; }
-    const backCam = cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[0];
-    html5QrCode.start(backCam.id, {
-      fps: 10,
-      qrbox: { width: 250, height: 150 },
-      formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
-    },
-      (decodedText) => onScanSuccess(decodedText), () => {})
-      .catch(() => showCameraError(readerEl, "Не удалось запустить камеру. Разрешите доступ к камере в браузере."));
-  }).catch(() => showCameraError(readerEl, "Нет доступа к камере"));
-}
-
-function showCameraError(readerEl, message) {
-  readerEl.innerHTML = `<p class="error">${escapeHtml(message)}</p><button class="btn-secondary" onclick="retryCamera()">Попробовать снова</button>`;
-}
-function retryCamera() { stopScanner(); setTimeout(startScanner, 300); }
-function stopScanner() {
-  if (html5QrCode) {
-    try { const result = html5QrCode.stop(); if (result && typeof result.catch === "function") result.catch(() => {}); } catch (e) {}
-    html5QrCode = null;
-  }
-}
-function onScanSuccess(decodedText) { stopScanner(); lookupCode(decodedText.trim()); }
-function showManualInput() { document.getElementById("manual-input-wrap").style.display = "block"; }
-function submitManual() {
-  const code = document.getElementById("manual-input").value.trim();
-  if (!code) return;
-  stopScanner();
-  lookupCode(code);
-}
-function backToScan() {
-  document.getElementById("manual-input-wrap").style.display = "none";
-  document.getElementById("manual-input").value = "";
-  show("scan");
-  startScanner();
-}
-
-// ---------- ПОИСК И ОТОБРАЖЕНИЕ ----------
-
-async function lookupCode(code) {
-  show("result");
-  const body = document.getElementById("result-body");
-  body.innerHTML = '<div class="spinner"></div><p class="hint">Ищу отгрузку ' + escapeHtml(code) + '…</p>';
-  const auth = getSavedAuth();
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(code)}&_=${Date.now()}`, { headers: { Authorization: auth }, signal: controller.signal, cache: "no-store" });
-    clearTimeout(timeoutId);
-    if (res.status === 401) { logout(); return; }
-    const data = await res.json();
-    if (!data.found) { renderNotFound(code); return; }
-    currentResult = data;
-
-    if (data.alreadyShipped) {
-      renderAlreadyShipped(data);
-    } else if (!data.ready) {
-      renderWrongStatus(data);
-    } else if (currentRoute && !currentRoute.closedAt && currentRoute.numbers.includes(data.name)) {
-      if (currentRoute.scanned.has(data.name)) renderAlreadyScanned(data);
-      else markRouteScanned(data);
-    } else if (currentRoute && !currentRoute.closedAt && currentRoute.numbers.length && !currentRoute.numbers.includes(data.name)) {
-      renderNotInRoute(data);
-    } else {
-      
-      renderReady(data);
-    }
-  } catch (e) {
-    clearTimeout(timeoutId);
-    if (e.name === "AbortError") body.innerHTML = '<div class="card bad"><div class="badge bad">ДОЛГИЙ ОТВЕТ</div><p>Сервер МойСклад отвечает дольше 15 секунд. Подождите немного и попробуйте снова.</p></div>';
-    else body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Не удалось связаться с сервером. Проверьте интернет.</p></div>';
-  }
-}
-
-function renderNotFound(code) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad"><div class="badge bad">НЕ НАЙДЕНО</div><div class="num">№ ${escapeHtml(code)}</div><p class="meta">Отгрузка с таким номером не найдена. Это может быть чужой или неверный штрихкод.</p></div>`;
-}
-function renderWrongStatus(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad"><div class="badge bad">НЕ ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div><p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p></div>`;
-}
-function renderAlreadyShipped(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad"><div class="badge bad">УЖЕ ОТГРУЖЕНО</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p></div>`;
-}
-function renderNotInRoute(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad"><div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><p class="meta">Заказ собран, но его нет в загруженном маршруте "${escapeHtml(currentRoute.type)}". Для отдельной отгрузки подтвердите её без маршрута.</p><button class="btn-success" onclick="confirmShip()">Подтвердить отгрузку</button></div>`;
-}
-function renderAlreadyScanned(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">УЖЕ ПРОСКАНИРОВАНО ✓</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><p class="meta">Отгрузка уже отмечена в текущем маршруте. Статус в МойСклад пока не менялся.</p></div>`;
-}
-function markRouteScanned(data) {
-  currentRoute.scanned.add(data.name);
-  currentRoute.scannedItems[data.name] = { id: data.id, name: data.name, places: data.places };
-  saveRouteToStorage();
-  renderRouteStatus();
-  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ПРОВЕРЕНО ✓</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><p class="meta">Отгрузка есть в маршруте и отмечена. Статус в МойСклад пока не менялся.</p></div><div id="photo-block" class="card"><p class="hint">Загружаю фото…</p></div>`;
-  loadPhoto(data.name);
-}
-async function openOrderDetail(number) {
-  const listEl = document.getElementById("modal-list");
-  const titleEl = document.getElementById("modal-title");
-  if (titleEl) titleEl.textContent = `Заказ № ${number}`;
-  listEl.innerHTML = '<div class="spinner"></div><p class="hint">Загружаю…</p>';
-
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(number)}&_=${Date.now()}`, {
-      headers: { Authorization: getSavedAuth() },
-      cache: "no-store",
-    });
-    const data = await res.json();
-
-    if (!data.found) {
-      listEl.innerHTML = `<p class="error">Заказ № ${escapeHtml(number)} не найден.</p>
-        <button class="link-btn" onclick="renderModalList(); document.getElementById('modal-title').textContent='Список маршрута';">← Назад к списку</button>`;
-      return;
-    }
-
-    listEl.innerHTML = `
-      <div class="card">
-        <div class="num">№ ${escapeHtml(data.name)}</div>
-        <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-        <div class="meta">Статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-        <div class="meta">Позиций: <b>${escapeHtml(String(data.positionsCount))}</b></div>
-        <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
-      </div>
-      <button class="btn-secondary" onclick="loadPhotoInto('photo-slot-${escapeHtml(data.name)}', '${escapeHtml(data.name)}')">Фото</button>
-      <div id="photo-slot-${escapeHtml(data.name)}"></div>
-      <button class="link-btn" onclick="renderModalList(); document.getElementById('modal-title').textContent='Список маршрута';">← Назад к списку</button>
-    `;
-  } catch (e) {
-    listEl.innerHTML = '<p class="error">Не удалось загрузить данные заказа.</p>';
-  }
-}
-
-async function loadPhotoInto(elId, number) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  el.innerHTML = '<p class="hint">Загружаю фото…</p>';
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}&_=${Date.now()}`, {
-      headers: { Authorization: getSavedAuth() },
-      cache: "no-store",
-    });
-    const data = await res.json();
-    if (data.found && data.url) {
-      el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; margin-top:8px;" onclick="window.open('${data.url}','_blank')">`;
-    } else {
-      el.innerHTML = renderPhotoDebug(data);
-    }
-  } catch (e) {
-    el.innerHTML = '<p class="hint">Не удалось загрузить фото</p>';
-  }
-}
-function renderReady(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card ok"><div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ${escapeHtml(data.name)}</div><div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div><div class="meta">Количество мест: <b>${escapeHtml(data.places == null ? "—" : String(data.places))}</b></div><div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div><div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div><p class="meta">Это индивидуальная отгрузка. После подтверждения статус изменится в МойСклад.</p></div><div id="photo-block" class="card"><p class="hint">Загружаю фото…</p></div><button class="btn-success" onclick="confirmShip()">Подтвердить отгрузку</button>`;
-  loadPhoto(data.name);
-}
-
-function renderPhotoDebug(data) {
-  let html = '<p class="hint">Фото не найдено в Bitrix24</p>';
-  if (data.error) {
-    html += `<p class="hint" style="color:#fca5a5;">Ошибка: ${escapeHtml(data.error)}</p>`;
-  }
-  
-  const rest = Object.assign({}, data);
-  delete rest.found;
-  delete rest.error;
-  delete rest.url;
-  if (Object.keys(rest).length) {
-    html += `<pre style="font-size:11px; color:#9ca3af; text-align:left; white-space:pre-wrap; word-break:break-all; margin-top:8px; max-height:300px; overflow:auto;">${escapeHtml(JSON.stringify(rest, null, 2))}</pre>`;
-  }
-  return html;
-}
-
-async function loadPhoto(number) {
-  const el = document.getElementById("photo-block");
-  if (!el) return;
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}&_=${Date.now()}`, {
-      headers: { Authorization: getSavedAuth() },
-      cache: "no-store",
-    });
-    const data = await res.json();
-    if (!el.isConnected) return; 
-    if (data.found && data.url) {
-      el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; display:block;" onclick="window.open('${data.url}','_blank')">`;
-    } else {
-      el.innerHTML = renderPhotoDebug(data);
-    }
-  } catch (e) {
-    if (el.isConnected) el.innerHTML = '<p class="hint">Не удалось загрузить фото</p>';
-  }
-}
-
-async function confirmShip() {
-  if (!currentResult) return;
-  const body = document.getElementById("result-body");
-  body.innerHTML = '<div class="spinner"></div><p class="hint">Меняю статус…</p>';
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/ship`, { method: "POST", headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" }, body: JSON.stringify({ id: currentResult.id }) });
-    if (res.status === 401) { logout(); return; }
-    const data = await res.json();
-    if (data.ok) {
-      if (currentRoute && currentRoute.closedAt && currentRoute.numbers.includes(currentResult.name)) {
-        currentRoute.scanned.add(currentResult.name);
-        currentRoute.scannedItems[currentResult.name] = { id: currentResult.id, name: currentResult.name, places: currentResult.places, shipped: true };
-        saveRouteToStorage();
-        renderRouteStatus();
-      }
-      body.innerHTML = `<div class="card ok"><div class="badge ok">ОТГРУЖЕНО ✓</div><div class="num">№ ${escapeHtml(currentResult.name)}</div><p class="meta">Статус успешно изменён в МойСклад.</p></div>`;
-    } else {
-      body.innerHTML = `<div class="card bad"><div class="badge bad">ОШИБКА</div><p>${escapeHtml(data.error || "Не удалось изменить статус")}</p></div>`;
-    }
-  } catch (e) { body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Нет соединения с сервером.</p></div>'; }
-}
-
-function escapeHtml(str) { const d = document.createElement("div"); d.textContent = str == null ? "" : String(str); return d.innerHTML; }
-
-window.addEventListener("load", () => {
-  cleanupOldRouteStorage();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
-  if (getSavedAuth()) enterScanScreen(); else show("login");
-});
+function openPhotoModal(){if(!groupOrders.length)return;photoFiles=[];$("photo-title").textContent=groupOrders.length===1?`Фото отгрузки № ${groupOrders[0].name}`:`Фото упаковки · ${groupOrders.length} отгрузки`;$('photo-numbers').textContent=groupOrders.map(d=>`№ ${d.name}`).join(" · ");$("photo-status").textContent="";$("photo-input-camera").value="";$("photo-input-gallery").value="";renderPhotoGrid();$("photo-modal").classList.add("active")}
+function closePhotoModal(){$("photo-modal").classList.remove("active")}
+function openCamera(){$("photo-input-camera").click()}
+function openGallery(){$("photo-input-gallery").click()}
+function addAnotherPhoto(){$("photo-input-camera").click()}
+function handlePhotoFiles(files){[...files].forEach(f=>{if(f.type.startsWith("image/"))photoFiles.push(f)});$("photo-input-camera").value="";$("photo-input-gallery").value="";renderPhotoGrid()}
+function renderPhotoGrid(){const grid=$("photo-grid");grid.innerHTML="";photoFiles.forEach((file,i)=>{const url=URL.createObjectURL(file);const div=document.createElement("div");div.className="photo-item";div.innerHTML=`<img src="${url}"><button class="btn-danger photo-remove" onclick="removePhoto(${i})">×</button>`;grid.appendChild(div)})}
+function removePhoto(i){photoFiles.splice(i,1);renderPhotoGrid()}
+async function compressPhoto(file){return new Promise((resolve,reject)=>{const img=new Image(),url=URL.createObjectURL(file);img.onload=()=>{const max=1600,scale=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);c.getContext("2d").drawImage(img,0,0,c.width,c.height);c.toBlob(b=>{URL.revokeObjectURL(url);b?resolve(b):reject(new Error("compress"))},"image/jpeg",.82)};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error("image"))};img.src=url})}
+function blobToBase64(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(",")[1]);r.onerror=reject;r.readAsDataURL(blob)})}
+async function uploadPhotos(){if(!photoFiles.length){alert("Сначала сделайте хотя бы одно фото");return}if(photoBusy)return;photoBusy=true;$("photo-status").textContent="Загружаю фото в Битрикс24…";try{const photos=[];for(const f of photoFiles){const b=await compressPhoto(f);photos.push({name:f.name.replace(/\.[^.]+$/,"" )+".jpg",content:await blobToBase64(b)})}const r=await fetch(`${CONFIG.PROXY_URL}/photo/upload`,{method:"POST",headers:{"Authorization":"Bearer "+auth(),"Content-Type":"application/json"},body:JSON.stringify({numbers:groupOrders.map(d=>d.name),photos,by:user()})});if(r.status===401){logout();return}const d=await r.json();if(!d.ok)throw new Error(d.error||"upload");$("photo-status").textContent=`Загружено: ${d.uploaded} фото`;setTimeout(closePhotoModal,700)}catch(e){$("photo-status").textContent="Не удалось загрузить фото. Проверьте настройки Bitrix24."}finally{photoBusy=false}}
+window.addEventListener("load",()=>{if(sessionIsValid()){enterScan();setTimeout(()=>{if(!sessionIsValid())logout()},Math.max(0,sessionExpiresAt()-Date.now()+250))}else logout()})
