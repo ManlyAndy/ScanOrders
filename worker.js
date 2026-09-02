@@ -1,34 +1,26 @@
-/*
- * ПРОКСИ ДЛЯ ПРИЛОЖЕНИЯ "КОНТРОЛЬ ОТГРУЗОК"
- * ==========================================
- * Разворачивается на Cloudflare Workers. Не хранит и не логирует
- * логин/пароль — только пересылает их в МойСклад для каждого запроса.
- * Этот код разрешает делать со стороны приложения ТОЛЬКО эти действия:
- *   1. Найти отгрузку по номеру (только чтение)
- *   2. Сменить статус одной отгрузки на статус "отгружено"
- *   3. Закрыть маршрут: массово сменить статусы просканированных отгрузок
- *   4. Сохранить/прочитать список номеров маршрута на дату (в KV-хранилище)*/
-
-//значения синхронно со значениями в config.js
+const API_BASE = "https://api.moysklad.ru/api/remap/1.2";
 const STATUS_READY_NAME = "Собрано";
 const STATUS_SHIPPED_NAME = "Отгружено";
 const PLACES_FIELD_NAME = "Количество мест";
-
 const BITRIX_CHAT_ID = 11359;
 const BITRIX_DIALOG_ID = `chat${BITRIX_CHAT_ID}`;
-
 const ALLOWED_ORIGIN = "https://manlyandy.github.io";
+const SESSION_TTL = 28800;
 
-// Логины МойСклад, которым разрешено ЗАГРУЖАТЬ/ОБНОВЛЯТЬ маршруты.
-// ROUTE_UPLOAD_LOGINS=login1@company.ru,login2@company.ru,logist@company.ru
+const ALLOWED_MS_LOGINS = new Set([
+  "Biba@boss191",
+  "Mini@boss191"
+].map(v => v.trim().toLowerCase()).filter(Boolean));
 
-const API_BASE = "https://api.moysklad.ru/api/remap/1.2";
+const ALLOWED_ROUTE_LOGINS = new Set([
+  "Biba@boss191"
+].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
   };
 }
 
@@ -38,78 +30,101 @@ function json(data, status = 200) {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-store, no-cache, must-revalidate",
-      ...corsHeaders(),
-    },
+      ...corsHeaders()
+    }
   });
 }
 
-
-function getAuthUsername(auth) {
+function getBasicUsername(auth) {
   try {
     if (!auth || !auth.startsWith("Basic ")) return "";
     const raw = atob(auth.slice(6));
     const colon = raw.indexOf(":");
     return colon >= 0 ? raw.slice(0, colon).trim().toLowerCase() : "";
-  } catch (e) {
+  } catch {
     return "";
   }
 }
 
-function canUploadRoute(auth, env) {
-  const username = getAuthUsername(auth);
-  const configured = String(env.ROUTE_UPLOAD_LOGINS || "")
-    .split(",")
-    .map((x) => x.trim().toLowerCase())
-    .filter(Boolean);
-  return !!username && configured.includes(username);
+function isAllowedLogin(username) {
+  return ALLOWED_MS_LOGINS.has(String(username || "").trim().toLowerCase());
+}
+
+function isAllowedRouteLogin(username) {
+  return ALLOWED_ROUTE_LOGINS.has(String(username || "").trim().toLowerCase());
 }
 
 async function verifyAuth(auth) {
+  if (!auth?.startsWith("Basic ")) return false;
   const res = await fetch(`${API_BASE}/entity/employee?limit=1`, {
-    headers: { Authorization: auth },
+    headers: { Authorization: auth }
   });
   return res.ok;
+}
+
+async function createSession(auth, env) {
+  if (!env.ROUTES) return null;
+  const tokenBytes = new Uint8Array(32);
+  crypto.getRandomValues(tokenBytes);
+  const token = Array.from(tokenBytes, b => b.toString(16).padStart(2, "0")).join("");
+  await env.ROUTES.put(`session:${token}`, auth, { expirationTtl: SESSION_TTL });
+  return token;
+}
+
+async function getSessionAuth(request, env) {
+  const header = request.headers.get("Authorization") || "";
+  if (!header.startsWith("Bearer ") || !env.ROUTES) return null;
+  const token = header.slice(7).trim();
+  if (!/^[a-f0-9]{64}$/.test(token)) return null;
+  return await env.ROUTES.get(`session:${token}`);
+}
+
+function unauthorized() {
+  return json({ error: "Сессия недействительна или истекла" }, 401);
+}
+
+async function handleLogin(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  if (!auth.startsWith("Basic ")) return unauthorized();
+
+  const username = getBasicUsername(auth);
+  if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
+  if (!(await verifyAuth(auth))) return json({ error: "Неверный логин или пароль" }, 401);
+
+  const token = await createSession(auth, env);
+  if (!token) return json({ error: "Сервер авторизации не настроен" }, 500);
+  return json({ ok: true, token, expiresIn: SESSION_TTL, user: username });
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders() });
-    }
+    if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders() });
+    if (url.pathname === "/login" && request.method === "POST") return handleLogin(request, env);
 
-    const auth = request.headers.get("Authorization");
-    if (!auth || !auth.startsWith("Basic ")) {
-      return json({ error: "Нет авторизации" }, 401);
-    }
+    const auth = await getSessionAuth(request, env);
+    if (!auth) return unauthorized();
+
+    const username = getBasicUsername(auth);
+    if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
 
     try {
-      if (url.pathname === "/find" && request.method === "GET") {
-        return await handleFind(url, auth);
-      }
-      if (url.pathname === "/ship" && request.method === "POST") {
-        return await handleShip(request, auth);
-      }
-      if (url.pathname === "/finish" && request.method === "POST") {
-        return await handleFinish(request, auth);
-      }
+      if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
+      if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
+      if (url.pathname === "/finish" && request.method === "POST") return await handleFinish(request, auth);
       if (url.pathname === "/route" && request.method === "POST") {
+        if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
         return await handleRouteUpload(request, auth, env);
       }
-      if (url.pathname === "/route" && request.method === "GET") {
-        return await handleRouteGet(url, auth, env);
-      }
-      if (url.pathname === "/photo" && request.method === "GET") {
-        return await handlePhoto(url, auth, env);
-      }
-    } catch (e) {
-      return json({ error: "Внутренняя ошибка", details: String(e) }, 500);
+      if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
+      if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
+    } catch {
+      return json({ error: "Внутренняя ошибка" }, 500);
     }
 
-    
     return json({ error: "Действие не разрешено" }, 403);
-  },
+  }
 };
 
 async function handleFind(url, auth) {
@@ -119,25 +134,20 @@ async function handleFind(url, auth) {
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state`, {
     headers: { Authorization: auth },
-    cf: { cacheTtl: 0, cacheEverything: false },
+    cf: { cacheTtl: 0, cacheEverything: false }
   });
 
-  if (res.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
-  if (!res.ok) return json({ error: "Ошибка МойСклад", status: res.status }, 502);
+  if (res.status === 401) return unauthorized();
+  if (!res.ok) return json({ error: "Ошибка МойСклад" }, 502);
 
   const data = await res.json();
-    const row = data.rows && data.rows[0];
-
+  const row = data.rows && data.rows[0];
   if (!row) return json({ found: false });
 
- 
   const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state`, {
-    headers: { Authorization: auth },
+    headers: { Authorization: auth }
   });
-
-  if (!detailRes.ok) {
-    return json({ error: "Не удалось получить данные отгрузки", status: detailRes.status }, 502);
-  }
+  if (!detailRes.ok) return json({ error: "Не удалось получить данные отгрузки" }, 502);
 
   const detail = await detailRes.json();
   const stateName = detail.state ? detail.state.name : null;
@@ -151,20 +161,18 @@ async function handleFind(url, auth) {
     sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
     positionsCount: detail.positions && detail.positions.meta ? detail.positions.meta.size : "—",
     places,
-    stateName: stateName,
+    stateName,
     ready: stateName === STATUS_READY_NAME,
-    alreadyShipped: stateName === STATUS_SHIPPED_NAME,
+    alreadyShipped: stateName === STATUS_SHIPPED_NAME
   });
 }
 
-
 function extractPlaces(row) {
   const attrs = Array.isArray(row.attributes) ? row.attributes : [];
-  const exact = attrs.find((a) => String(a.name || "").trim().toLowerCase() === PLACES_FIELD_NAME.toLowerCase());
-  const flexible = attrs.find((a) => /количеств.*мест/i.test(String(a.name || "")));
+  const exact = attrs.find(a => String(a.name || "").trim().toLowerCase() === PLACES_FIELD_NAME.toLowerCase());
+  const flexible = attrs.find(a => /количеств.*мест/i.test(String(a.name || "")));
   const attr = exact || flexible;
   if (!attr) return null;
-
   const value = attr.value;
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "object" && value !== null) {
@@ -179,418 +187,139 @@ async function handleShip(request, auth) {
   const id = body.id;
   if (!id) return json({ error: "Не передан id отгрузки" }, 400);
 
- 
   const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
     headers: { Authorization: auth },
-    cf: { cacheTtl: 0, cacheEverything: false },
+    cf: { cacheTtl: 0, cacheEverything: false }
   });
-  if (demandRes.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
+  if (demandRes.status === 401) return unauthorized();
   if (!demandRes.ok) return json({ error: "Не удалось проверить отгрузку" }, 502);
+
   const demand = await demandRes.json();
   const currentState = demand.state ? demand.state.name : null;
-  if (currentState === STATUS_SHIPPED_NAME) return json({ ok: true, alreadyShipped: true });
   if (currentState !== STATUS_READY_NAME) {
-    return json({ error: `Статус уже изменился: сейчас "${currentState || "—"}"`, stateName: currentState }, 409);
+    return json({ ok: false, error: `Отгрузка сейчас в статусе "${currentState || "—"}"` }, 409);
   }
 
-  
-  const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, {
-    headers: { Authorization: auth },
-  });
-  if (!metaRes.ok) return json({ error: "Не удалось получить статусы" }, 502);
+  const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, { headers: { Authorization: auth } });
+  if (!metaRes.ok) return json({ error: "Не удалось получить настройки МойСклад" }, 502);
   const meta = await metaRes.json();
-  const state = (meta.states || []).find((s) => s.name === STATUS_SHIPPED_NAME);
-  if (!state) {
-    return json({ error: `Статус "${STATUS_SHIPPED_NAME}" не найден в аккаунте` }, 500);
-  }
+  const states = meta.states || meta.states?.rows || [];
+  const shippedState = states.find(s => s.name === STATUS_SHIPPED_NAME);
+  if (!shippedState) return json({ error: "Статус отгрузки не найден" }, 500);
 
-  
-  const putRes = await fetch(`${API_BASE}/entity/demand/${id}`, {
+  const putRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { Authorization: auth, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      state: { meta: { href: state.meta.href, type: "state", mediaType: "application/json" } },
-    }),
+    body: JSON.stringify({ state: { meta: shippedState.meta } })
   });
-
-  if (putRes.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
-  if (!putRes.ok) return json({ error: "Не удалось сменить статус", status: putRes.status }, 502);
+  if (putRes.status === 401) return unauthorized();
+  if (!putRes.ok) return json({ error: "Не удалось сменить статус" }, 502);
 
   return json({ ok: true });
 }
 
 async function handleFinish(request, auth) {
   const body = await request.json();
-  const items = Array.isArray(body.items) ? body.items : [];
-  if (!items.length) return json({ error: "Нет просканированных отгрузок" }, 400);
-
-  .
-  const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, {
-    headers: { Authorization: auth },
-  });
-  if (metaRes.status === 401) return json({ error: "Неверный логин или пароль" }, 401);
-  if (!metaRes.ok) return json({ error: "Не удалось получить статусы" }, 502);
-  const meta = await metaRes.json();
-  const shippedState = (meta.states || []).find((s) => s.name === STATUS_SHIPPED_NAME);
-  if (!shippedState) return json({ error: `Статус "${STATUS_SHIPPED_NAME}" не найден в аккаунте` }, 500);
+  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(Boolean))].slice(0, 100) : [];
+  if (!ids.length) return json({ error: "Список отгрузок пуст" }, 400);
 
   const results = [];
-
-  
-  for (const rawItem of items) {
-    const id = String(rawItem.id || "").trim();
-    const name = String(rawItem.name || "").trim();
-    if (!id) {
-      results.push({ id, name, ok: false, error: "Не передан id отгрузки" });
-      continue;
-    }
-
+  for (const id of ids) {
     try {
       const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
         headers: { Authorization: auth },
-        cf: { cacheTtl: 0, cacheEverything: false },
+        cf: { cacheTtl: 0, cacheEverything: false }
       });
-
-      if (demandRes.status === 401) {
-        results.push({ id, name, ok: false, error: "Неверный логин или пароль" });
-        continue;
-      }
+      if (demandRes.status === 401) return unauthorized();
       if (!demandRes.ok) {
-        results.push({ id, name, ok: false, error: "Не удалось проверить отгрузку перед закрытием", status: demandRes.status });
+        results.push({ id, ok: false, error: "Не удалось проверить отгрузку" });
         continue;
       }
-
       const demand = await demandRes.json();
       const currentState = demand.state ? demand.state.name : null;
-      const actualName = demand.name || name;
-
       if (currentState === STATUS_SHIPPED_NAME) {
-        results.push({ id, name: actualName, alreadyShipped: true });
+        results.push({ id, ok: true, alreadyShipped: true });
+        continue;
+      }
+      if (currentState !== STATUS_READY_NAME) {
+        results.push({ id, ok: false, error: `Отгрузка сейчас в статусе "${currentState || "—"}"` });
         continue;
       }
 
-      if (currentState !== STATUS_READY_NAME) {
-        results.push({
-          id,
-          name: actualName,
-          ok: false,
-          error: `Статус изменился: сейчас "${currentState || "—"}", ожидался "${STATUS_READY_NAME}"`,
-          stateName: currentState,
-        });
+      const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, { headers: { Authorization: auth } });
+      if (!metaRes.ok) {
+        results.push({ id, ok: false, error: "Не удалось получить настройки МойСклад" });
+        continue;
+      }
+      const meta = await metaRes.json();
+      const states = meta.states || meta.states?.rows || [];
+      const shippedState = states.find(s => s.name === STATUS_SHIPPED_NAME);
+      if (!shippedState) {
+        results.push({ id, ok: false, error: "Статус отгрузки не найден" });
         continue;
       }
 
       const putRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { Authorization: auth, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          state: { meta: { href: shippedState.meta.href, type: "state", mediaType: "application/json" } },
-        }),
+        body: JSON.stringify({ state: { meta: shippedState.meta } })
       });
-
-      if (putRes.status === 401) {
-        results.push({ id, name: actualName, ok: false, error: "Неверный логин или пароль" });
-      } else if (!putRes.ok) {
-        let details = "";
-        try { details = await putRes.text(); } catch (e) {}
-        results.push({ id, name: actualName, ok: false, error: "Не удалось сменить статус", status: putRes.status, details });
-      } else {
-    
-        const verifyRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
-          headers: { Authorization: auth },
-          cf: { cacheTtl: 0, cacheEverything: false },
-        });
-        const verifyData = verifyRes.ok ? await verifyRes.json() : null;
-        const verifiedState = verifyData && verifyData.state ? verifyData.state.name : null;
-        if (verifiedState === STATUS_SHIPPED_NAME) {
-          results.push({ id, name: actualName, ok: true });
-        } else {
-          results.push({
-            id,
-            name: actualName,
-            ok: false,
-            error: `Запрос прошёл успешно, но статус не изменился (сейчас: "${verifiedState || "—"}")`,
-            usedHref: shippedState.meta.href,
-          });
-        }
+      if (putRes.status === 401) return unauthorized();
+      if (!putRes.ok) {
+        results.push({ id, ok: false, error: "Не удалось сменить статус" });
+        continue;
       }
-    } catch (e) {
-      results.push({ id, name, ok: false, error: "Ошибка соединения с МойСклад" });
+      results.push({ id, ok: true });
+    } catch {
+      results.push({ id, ok: false, error: "Ошибка соединения с МойСклад" });
     }
   }
 
-  const success = results.filter((x) => x.ok || x.alreadyShipped).length;
+  const success = results.filter(x => x.ok || x.alreadyShipped).length;
   const failed = results.length - success;
   return json({ ok: failed === 0, total: results.length, success, failed, results });
 }
 
-// ---------- МАРШРУТНЫЕ ЛИСТЫ ----------
-
 function routeKey(date) {
-  return `route:${date}`; // date в формате YYYY-MM-DD
+  return `route:${date}`;
 }
 
 async function handleRouteUpload(request, auth, env) {
-
-  if (!env.ROUTES) {
-    return json({ error: "Хранилище маршрутов не подключено к Worker'у (см. README)" }, 500);
-  }
-
-  const ok = await verifyAuth(auth);
-  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
+  if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
 
   const body = await request.json();
   const date = (body.date || "").trim();
-  const numbers = Array.isArray(body.numbers) ? body.numbers : [];
+  const numbers = Array.isArray(body.numbers) ? [...new Set(body.numbers.map(x => String(x).trim()).filter(Boolean))].slice(0, 1000) : [];
   const label = (body.label || "").trim();
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
-  }
-  if (!numbers.length) {
-    return json({ error: "Список номеров пуст" }, 400);
-  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Неверный формат даты" }, 400);
+  if (!numbers.length) return json({ error: "Список номеров пуст" }, 400);
+  if (!label || label.length > 100) return json({ error: "Неверное название маршрута" }, 400);
 
   const key = routeKey(date);
-  const existingRaw = await env.ROUTES.get(key);
-  const existing = existingRaw ? JSON.parse(existingRaw) : { date, items: [] };
+  const existing = await env.ROUTES.get(key, { type: "json" });
+  const items = Array.isArray(existing?.items) ? existing.items : [];
+  const filtered = items.filter(item => item.label !== label);
+  filtered.push(...numbers.map(number => ({ number, label })));
+  await env.ROUTES.put(key, JSON.stringify({ date, items: filtered }));
 
-  const byNumber = new Map(existing.items.map((it) => [it.number, it]));
-  for (const n of numbers) {
-    const num = String(n).trim();
-    if (!num) continue;
-    byNumber.set(num, { number: num, label: label || (byNumber.get(num) || {}).label || "" });
-  }
-
-  const updated = { date, items: Array.from(byNumber.values()), updatedAt: new Date().toISOString() };
-  await env.ROUTES.put(key, JSON.stringify(updated));
-
-  return json({ ok: true, date, count: updated.items.length });
+  return json({ ok: true, count: filtered.length });
 }
 
 async function handleRouteGet(url, auth, env) {
-  if (!env.ROUTES) {
-    return json({ error: "Хранилище маршрутов не подключено к Worker'у (см. README)" }, 500);
-  }
-
-  const ok = await verifyAuth(auth);
-  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
-
+  if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
   const date = (url.searchParams.get("date") || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return json({ error: "Неверный формат даты, ожидается YYYY-MM-DD" }, 400);
-  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Неверный формат даты" }, 400);
+  if (!(await verifyAuth(auth))) return unauthorized();
 
-  const raw = await env.ROUTES.get(routeKey(date));
-  if (!raw) return json({ found: false, date });
-
-  const data = JSON.parse(raw);
-  return json({
-    found: true,
-    date,
-    updatedAt: data.updatedAt,
-    numbers: data.items.map((it) => it.number),
-    items: data.items,
-  });
+  const data = await env.ROUTES.get(routeKey(date), { type: "json" });
+  return json(data ? { found: true, ...data } : { found: false, date });
 }
 
-
-
 async function handlePhoto(url, auth, env) {
-  if (!env.BITRIX_WEBHOOK_URL) {
-    return json({
-      error: "Интеграция с Bitrix24 не настроена"
-    }, 500);
-  }
-
-  const ok = await verifyAuth(auth);
-  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
-
   const number = (url.searchParams.get("number") || "").trim();
-  if (!number) {
-    return json({ error: "Не передан номер отгрузки" }, 400);
-  }
-
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-
-  try {
-
-    const searchRes = await fetch(
-      `${webhook}/im.dialog.messages.search.json`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          CHAT_ID: BITRIX_CHAT_ID,
-          SEARCH_MESSAGE: number,
-          ORDER: { ID: "DESC" },
-          LIMIT: 20,
-        }),
-      }
-    );
-
-    if (!searchRes.ok) {
-      return json({
-        error: "Bitrix24 недоступен при поиске сообщения",
-        status: searchRes.status,
-      }, 502);
-    }
-
-    const searchData = await searchRes.json();
-
-    if (searchData.error) {
-      return json({
-        error: `Ошибка Bitrix24: ${
-          searchData.error_description || searchData.error
-        }`
-      }, 502);
-    }
-
-    const result = searchData.result || {};
-
-    const messages = Array.isArray(result.messages)
-      ? result.messages
-      : [];
-
-    
-    const files = Array.isArray(result.files)
-      ? result.files
-      : [];
-
-    const normalizedNumber = number.toLowerCase();
-
-    const matchingMessages = messages.filter((message) => {
-      const text = String(message.text || "").trim().toLowerCase();
-
-      return (
-        text === normalizedNumber ||
-        text.includes(normalizedNumber)
-      );
-    });
-
-    if (!matchingMessages.length) {
-      return json({
-        found: false,
-        chatId: BITRIX_CHAT_ID,
-        dialogId: BITRIX_DIALOG_ID,
-        number,
-        debug: {
-          messagesFound: messages.length,
-          messages: messages.slice(0, 10).map((m) => ({
-            id: m.id,
-            text: m.text,
-            date: m.date
-          }))
-        }
-      });
-    }
-
-    
-    const message = matchingMessages[0];
-
-    
-    let messageFiles = files.filter((file) => {
-      const fileMessageId =
-        file.messageId ??
-        file.message_id ??
-        file.MESSAGE_ID ??
-        null;
-
-      return fileMessageId == null ||
-             Number(fileMessageId) === Number(message.id);
-    });
-
-    
-    const imageFiles = messageFiles.filter((file) => {
-      const type = String(file.type || "").toLowerCase();
-      const extension = String(file.extension || "").toLowerCase();
-
-      return (
-        type === "image" ||
-        ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension)
-      );
-    });
-
-    
-    const images = [];
-
-    for (const file of imageFiles) {
-      let publicUrl = null;
-
-      try {
-        const diskRes = await fetch(
-          `${webhook}/disk.file.get.json`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: file.id }),
-          }
-        );
-
-        if (diskRes.ok) {
-          const diskData = await diskRes.json();
-
-          if (diskData.result) {
-            publicUrl =
-              diskData.result.DOWNLOAD_URL ||
-              diskData.result.DETAIL_URL ||
-              null;
-          }
-        }
-      } catch (e) {}
-
-      const finalUrl =
-        publicUrl ||
-        file.urlShow ||
-        file.urlPreview ||
-        file.urlDownload ||
-        null;
-
-      if (finalUrl) {
-        images.push({
-          id: file.id,
-          name: file.name || `photo-${file.id}`,
-          url: finalUrl,
-          type: file.type || "image",
-        });
-      }
-    }
-
-    if (!images.length) {
-      return json({
-        found: false,
-        chatId: BITRIX_CHAT_ID,
-        dialogId: BITRIX_DIALOG_ID,
-        number,
-        messageId: message.id,
-        messageText: message.text || "",
-        debug: {
-          filesFromSearch: files.length,
-          files: files.map((f) => ({
-            id: f.id,
-            name: f.name,
-            type: f.type,
-            extension: f.extension
-          }))
-        }
-      });
-    }
-
-    return json({
-      found: true,
-      chatId: BITRIX_CHAT_ID,
-      dialogId: BITRIX_DIALOG_ID,
-      number,
-      messageId: message.id,
-      messageText: message.text || "",
-      url: images[0].url,
-      images,
-    });
-
-  } catch (e) {
-    return json({
-      error: "Не удалось связаться с Bitrix24",
-      details: String(e)
-    }, 500);
-  }
+  if (!number) return json({ error: "Не передан номер" }, 400);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  return json({ ok: false, error: "Фото не поддерживается этим Worker" }, 501);
 }
