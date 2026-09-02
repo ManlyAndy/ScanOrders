@@ -219,7 +219,7 @@ async function handleShip(request, auth) {
 
 async function handleFinish(request, auth) {
   const body = await request.json();
-  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(Boolean))].slice(0, 100) : [];
+  const ids = Array.isArray(body.items) ? [...new Set(body.items.map(x => x && x.id).filter(Boolean))].slice(0, 100) : [];
   if (!ids.length) return json({ error: "Список отгрузок пуст" }, 400);
 
   const results = [];
@@ -317,8 +317,202 @@ async function handleRouteGet(url, auth, env) {
 }
 
 async function handlePhoto(url, auth, env) {
+  if (!env.BITRIX_WEBHOOK_URL) {
+    return json({
+      error: "Интеграция с Bitrix24 не настроена"
+    }, 500);
+  }
+
+  const ok = await verifyAuth(auth);
+  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
+
   const number = (url.searchParams.get("number") || "").trim();
-  if (!number) return json({ error: "Не передан номер" }, 400);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  return json({ ok: false, error: "Фото не поддерживается этим Worker" }, 501);
+  if (!number) {
+    return json({ error: "Не передан номер отгрузки" }, 400);
+  }
+
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+
+  try {
+    // Ищем номер ТОЛЬКО в нужном чате.
+    const searchRes = await fetch(
+      `${webhook}/im.dialog.messages.search.json`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          CHAT_ID: BITRIX_CHAT_ID,
+          SEARCH_MESSAGE: number,
+          ORDER: { ID: "DESC" },
+          LIMIT: 20,
+        }),
+      }
+    );
+
+    if (!searchRes.ok) {
+      return json({
+        error: "Bitrix24 недоступен при поиске сообщения",
+        status: searchRes.status,
+      }, 502);
+    }
+
+    const searchData = await searchRes.json();
+
+    if (searchData.error) {
+      return json({
+        error: `Ошибка Bitrix24: ${
+          searchData.error_description || searchData.error
+        }`
+      }, 502);
+    }
+
+    const result = searchData.result || {};
+
+    const messages = Array.isArray(result.messages)
+      ? result.messages
+      : [];
+
+    // ВАЖНО:
+    // files здесь принадлежат найденным сообщениям.
+    const files = Array.isArray(result.files)
+      ? result.files
+      : [];
+
+    const normalizedNumber = number.toLowerCase();
+
+    const matchingMessages = messages.filter((message) => {
+      const text = String(message.text || "").trim().toLowerCase();
+
+      return (
+        text === normalizedNumber ||
+        text.includes(normalizedNumber)
+      );
+    });
+
+    if (!matchingMessages.length) {
+      return json({
+        found: false,
+        chatId: BITRIX_CHAT_ID,
+        dialogId: BITRIX_DIALOG_ID,
+        number,
+        debug: {
+          messagesFound: messages.length,
+          messages: messages.slice(0, 10).map((m) => ({
+            id: m.id,
+            text: m.text,
+            date: m.date
+          }))
+        }
+      });
+    }
+
+    // Берём конкретное найденное сообщение.
+    const message = matchingMessages[0];
+
+    // Если Bitrix вернул идентификатор сообщения у файла —
+    // дополнительно фильтруем по нему.
+    let messageFiles = files.filter((file) => {
+      const fileMessageId =
+        file.messageId ??
+        file.message_id ??
+        file.MESSAGE_ID ??
+        null;
+
+      return fileMessageId == null ||
+             Number(fileMessageId) === Number(message.id);
+    });
+
+    // Оставляем только изображения.
+    const imageFiles = messageFiles.filter((file) => {
+      const type = String(file.type || "").toLowerCase();
+      const extension = String(file.extension || "").toLowerCase();
+
+      return (
+        type === "image" ||
+        ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension)
+      );
+    });
+
+    // Получаем рабочие ссылки через Disk.
+    const images = [];
+
+    for (const file of imageFiles) {
+      let publicUrl = null;
+
+      try {
+        const diskRes = await fetch(
+          `${webhook}/disk.file.get.json`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: file.id }),
+          }
+        );
+
+        if (diskRes.ok) {
+          const diskData = await diskRes.json();
+
+          if (diskData.result) {
+            publicUrl =
+              diskData.result.DOWNLOAD_URL ||
+              diskData.result.DETAIL_URL ||
+              null;
+          }
+        }
+      } catch (e) {}
+
+      const finalUrl =
+        publicUrl ||
+        file.urlShow ||
+        file.urlPreview ||
+        file.urlDownload ||
+        null;
+
+      if (finalUrl) {
+        images.push({
+          id: file.id,
+          name: file.name || `photo-${file.id}`,
+          url: finalUrl,
+          type: file.type || "image",
+        });
+      }
+    }
+
+    if (!images.length) {
+      return json({
+        found: false,
+        chatId: BITRIX_CHAT_ID,
+        dialogId: BITRIX_DIALOG_ID,
+        number,
+        messageId: message.id,
+        messageText: message.text || "",
+        debug: {
+          filesFromSearch: files.length,
+          files: files.map((f) => ({
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            extension: f.extension
+          }))
+        }
+      });
+    }
+
+    return json({
+      found: true,
+      chatId: BITRIX_CHAT_ID,
+      dialogId: BITRIX_DIALOG_ID,
+      number,
+      messageId: message.id,
+      messageText: message.text || "",
+      url: images[0].url,
+      images,
+    });
+
+  } catch (e) {
+    return json({
+      error: "Не удалось связаться с Bitrix24",
+      details: String(e)
+    }, 500);
+  }
 }
