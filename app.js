@@ -111,7 +111,7 @@ async function lookupCode(code) {
     } else if (currentRoute && !currentRoute.closedAt && currentRoute.numbers.length && !currentRoute.numbers.includes(data.name)) {
       renderNotInRoute(data);
     } else {
-      // Без активного маршрута, а также после закрытия маршрута — индивидуальное подтверждение.
+      
       renderReady(data);
     }
   } catch (e) {
@@ -209,8 +209,7 @@ function renderPhotoDebug(data) {
   if (data.error) {
     html += `<p class="hint" style="color:#fca5a5;">Ошибка: ${escapeHtml(data.error)}</p>`;
   }
-  // Показываем ВСЁ, что прислал сервер, кроме уже показанных found/error —
-  // формат отладки в worker.js может меняться, тут не гадаем про поля.
+  
   const rest = Object.assign({}, data);
   delete rest.found;
   delete rest.error;
@@ -230,7 +229,7 @@ async function loadPhoto(number) {
       cache: "no-store",
     });
     const data = await res.json();
-    if (!el.isConnected) return; // экран уже сменился, пока грузилось фото
+    if (!el.isConnected) return; 
     if (data.found && data.url) {
       el.innerHTML = `<img src="${data.url}" alt="Фото заказа" style="width:100%; border-radius:10px; display:block;" onclick="window.open('${data.url}','_blank')">`;
     } else {
@@ -270,4 +269,3 @@ window.addEventListener("load", () => {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   if (getSavedAuth()) enterScanScreen(); else show("login");
 });
-//ebony
