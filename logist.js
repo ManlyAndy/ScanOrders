@@ -1,39 +1,13 @@
-// ===========================================================
-// Логика страницы логиста: вход, разбор PDF, отправка маршрута
-// ===========================================================
-
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-let parsedNumbers = [];
-
-function getBusinessDayKey(date = new Date()) {
-  const d = new Date(date);
-  if (d.getHours() < 7) d.setDate(d.getDate() - 1);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 function logout() {
-  localStorage.removeItem("sklad_auth");
+  localStorage.removeItem("sklad_session");
   localStorage.removeItem("sklad_user");
-  localStorage.removeItem("sklad_auth_day");
   document.getElementById("screen-main").style.display = "none";
   document.getElementById("screen-login").style.display = "block";
 }
 
 function getSavedAuth() {
-  const auth = localStorage.getItem("sklad_auth");
-  const sessionDay = localStorage.getItem("sklad_auth_day");
-  if (!auth || !sessionDay || sessionDay !== getBusinessDayKey()) {
-    localStorage.removeItem("sklad_auth");
-    localStorage.removeItem("sklad_user");
-    localStorage.removeItem("sklad_auth_day");
-    return null;
-  }
-  return auth;
+  const token = localStorage.getItem("sklad_session");
+  return token ? `Bearer ${token}` : null;
 }
 
 window.addEventListener("load", () => {
@@ -49,35 +23,19 @@ async function doLogin() {
   const pass = document.getElementById("login-pass").value;
   const errEl = document.getElementById("login-error");
   errEl.textContent = "";
-
-  if (!login || !pass) {
-    errEl.textContent = "Заполните логин и пароль";
-    return;
-  }
-
+  if (!login || !pass) { errEl.textContent = "Заполните логин и пароль"; return; }
   const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
-  const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-
   try {
-    // Лёгкая проверка логина — читаем (возможно, пустой) маршрут за сегодня
-    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${today}`, {
-      headers: { Authorization: authHeader },
-    });
-    if (res.status === 401) {
-      errEl.textContent = "Неверный логин или пароль";
-      return;
-    }
-  } catch (e) {
-    errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js";
-    return;
+    const res = await fetch(`${CONFIG.PROXY_URL}/login`, { method: "POST", headers: { Authorization: authHeader } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { errEl.textContent = data.error || "Не удалось войти"; return; }
+    localStorage.setItem("sklad_session", data.token);
+    localStorage.setItem("sklad_user", login);
+    document.getElementById("screen-login").style.display = "none";
+    document.getElementById("screen-main").style.display = "block";
+  } catch {
+    errEl.textContent = "Нет соединения с сервером";
   }
-
-  localStorage.setItem("sklad_auth", authHeader);
-  localStorage.setItem("sklad_user", login);
-  localStorage.setItem("sklad_auth_day", getBusinessDayKey());
-  document.getElementById("screen-login").style.display = "none";
-  document.getElementById("screen-main").style.display = "block";
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -106,19 +64,12 @@ async function handleFile(e) {
     }
 
     // Номер отгрузки: число, за которым идёт "Да" или "Нет" и дата ДД.ММ.ГГГГ
-    const regex1 = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
-const regex2 = /Расходная\s+накладная\s+№\s*(\d{4,7})/gi;
-
-const found = new Set();
-let m;
-
-while ((m = regex1.exec(fullText)) !== null) {
-  found.add(m[1]);
-}
-
-while ((m = regex2.exec(fullText)) !== null) {
-  found.add(m[1]);
-}
+    const regex = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
+    const found = new Set();
+    let m;
+    while ((m = regex.exec(fullText)) !== null) {
+      found.add(m[1]);
+    }
 
     parsedNumbers = Array.from(found);
 
