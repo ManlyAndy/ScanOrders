@@ -8,12 +8,12 @@ const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 const SESSION_TTL = 28800;
 
 const ALLOWED_MS_LOGINS = new Set([
-  "Biba@boss191",
-  "Mini@boss191"
+  "kovalkov@boss191"
+
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 const ALLOWED_ROUTE_LOGINS = new Set([
-  "Biba@boss191"
+  "kovalkov@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
