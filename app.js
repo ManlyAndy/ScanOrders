@@ -320,16 +320,34 @@ async function doLogin() {
   const errEl = document.getElementById("login-error");
   errEl.textContent = "";
   if (!login || !pass) { errEl.textContent = "Заполните логин и пароль"; return; }
+  
   const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
+  
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=__login_check__`, { headers: { Authorization: authHeader } });
+    // 1. Отправляем запрос на правильный эндпоинт /login методом POST
+    const res = await fetch(`${CONFIG.PROXY_URL}/login`, { 
+      method: "POST",
+      headers: { Authorization: authHeader } 
+    });
+    
     if (res.status === 401) { errEl.textContent = "Неверный логин или пароль"; return; }
+    if (res.status === 403) { errEl.textContent = "Доступ к приложению запрещён"; return; }
     if (!res.ok) { errEl.textContent = "Не удалось связаться с сервером. Проверьте адрес прокси в config.js"; return; }
-  } catch (e) { errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js"; return; }
-  localStorage.setItem("sklad_auth", authHeader);
-  localStorage.setItem("sklad_user", login);
-  localStorage.setItem("sklad_auth_day", getBusinessDayKey());
-  enterScanScreen();
+    
+    // 2.
+    const data = await res.json();
+    const bearerToken = "Bearer " + data.token;
+    
+    // 3.
+    localStorage.setItem("sklad_auth", bearerToken);
+    localStorage.setItem("sklad_user", login);
+    localStorage.setItem("sklad_auth_day", getBusinessDayKey());
+    
+    enterScanScreen();
+  } catch (e) { 
+    errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js"; 
+    return; 
+  }
 }
 
 function logout() {
