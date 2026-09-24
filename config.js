@@ -1,4 +1,3 @@
-
 const CONFIG = {
 
   PROXY_URL: "https://scanorders.ditrichhans10.workers.dev",
