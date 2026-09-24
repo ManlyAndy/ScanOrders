@@ -9,12 +9,14 @@ const SESSION_TTL = 28800;
 
 const ALLOWED_MS_LOGINS = new Set([
   "kovalkov@boss191",
-  "harunin@boss191"
+  "harunin@boss191",
+  "grishaev@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 const ALLOWED_ROUTE_LOGINS = new Set([
   "kovalkov@boss191",
-  "harunin@boss191"
+  "harunin@boss191",
+  "grishaev@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
