@@ -81,7 +81,7 @@ async function getSessionAuth(request, env) {
 }
 
 function unauthorized() {
-  return json({ error: "Сессия недействительна или истекла" }, 401);
+  return json({ error: "Сессия недействительна" }, 401);
 }
 
 async function handleLogin(request, env) {
@@ -108,14 +108,14 @@ export default {
     if (!auth) return unauthorized();
 
     const username = getBasicUsername(auth);
-    if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
+    if (!isAllowedLogin(username)) return json({ error: "Доступ запрещён" }, 403);
 
     try {
       if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
       if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
       if (url.pathname === "/finish" && request.method === "POST") return await handleFinish(request, auth);
       if (url.pathname === "/route" && request.method === "POST") {
-        if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
+        if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет прав" }, 403);
         return await handleRouteUpload(request, auth, env);
       }
       if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
@@ -336,7 +336,7 @@ async function handlePhoto(url, auth, env) {
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
 
   try {
-    // Ищем номер ТОЛЬКО в нужном чате.
+    // Ищем номер
     const searchRes = await fetch(
       `${webhook}/im.dialog.messages.search.json`,
       {
@@ -374,8 +374,7 @@ async function handlePhoto(url, auth, env) {
       ? result.messages
       : [];
 
-    // ВАЖНО:
-    // files здесь принадлежат найденным сообщениям.
+    
     const files = Array.isArray(result.files)
       ? result.files
       : [];
@@ -408,11 +407,10 @@ async function handlePhoto(url, auth, env) {
       });
     }
 
-    // Берём конкретное найденное сообщение.
+    
     const message = matchingMessages[0];
 
-    // Если Bitrix вернул идентификатор сообщения у файла —
-    // дополнительно фильтруем по нему.
+  
     let messageFiles = files.filter((file) => {
       const fileMessageId =
         file.messageId ??
@@ -424,7 +422,7 @@ async function handlePhoto(url, auth, env) {
              Number(fileMessageId) === Number(message.id);
     });
 
-    // Оставляем только изображения.
+   
     const imageFiles = messageFiles.filter((file) => {
       const type = String(file.type || "").toLowerCase();
       const extension = String(file.extension || "").toLowerCase();
@@ -435,7 +433,7 @@ async function handlePhoto(url, auth, env) {
       );
     });
 
-    // Получаем рабочие ссылки через Disk.
+   
     const images = [];
 
     for (const file of imageFiles) {
