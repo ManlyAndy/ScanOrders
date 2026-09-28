@@ -92,12 +92,13 @@ function renderRouteStatus() {
 
   const scanned = currentRoute.scanned.size;
   const total = currentRoute.numbers.length;
-  const missing = total - scanned;
+  const shippedCount = currentRoute.numbers.filter(n => currentRoute.scanned.has(String(n))).length;
+  const missing = Math.max(0, total - shippedCount);
   if (currentRoute.closedAt) {
-    el.textContent = `Маршрут "${currentRoute.type}" закрыт: отгружено ${scanned} из ${total}`;
+    el.textContent = `Маршрут "${currentRoute.type}" закрыт: отгружено ${shippedCount} из ${total}`;
     closeBtn.style.display = "none";
   } else {
-    el.textContent = `Маршрут "${currentRoute.type}" на ${currentRoute.date}: просканировано ${scanned} из ${total}`;
+    el.textContent = `Маршрут "${currentRoute.type}" на ${currentRoute.date}: просканировано ${shippedCount} из ${total}`;
     closeBtn.style.display = "block";
   }
   if (missing > 0 && currentRoute.closedAt) {
@@ -111,7 +112,7 @@ function renderRouteStatus() {
 function openRouteModal() {
   if (!currentRoute) return;
   document.getElementById("modal-title").textContent =
-    `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+    `Маршрут "${currentRoute.type}" — ${currentRoute.numbers.filter(n => currentRoute.scanned.has(String(n))).length} из ${currentRoute.numbers.length}`;
   renderModalList();
   document.getElementById("route-modal").classList.add("active");
 }
@@ -149,7 +150,7 @@ function renderModalList() {
     })
     .join("");
   const titleEl = document.getElementById("modal-title");
-  if (titleEl) titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+  if (titleEl) titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.numbers.filter(n => currentRoute.scanned.has(String(n))).length} из ${currentRoute.numbers.length}`;
 }
 
 async function loadRoute() {
@@ -214,7 +215,8 @@ async function closeRoute() {
 
   const total = currentRoute.numbers.length;
   const scanned = currentRoute.scanned.size;
-  const missing = total - scanned;
+  const shippedCount = currentRoute.numbers.filter(n => currentRoute.scanned.has(String(n))).length;
+  const missing = Math.max(0, total - shippedCount);
   const message = missing
     ? `В маршруте ${total} отгрузок, просканировано ${scanned}.\n\n` +
       `Не найдены: ${missing}.\n\n` +
@@ -247,7 +249,7 @@ async function closeRoute() {
       const key = item.name || item.id;
       if (!key) continue;
       if (item.ok || item.alreadyShipped) {
-        currentRoute.scanned.add(key);
+        currentRoute.scanned.add(String(key));
         currentRoute.scannedItems[key] = { id: item.id, name: key, shipped: true };
       } else {
         // Отметка сканирования остаётся только за реально отгруженными позициями.
@@ -257,6 +259,18 @@ async function closeRoute() {
       }
     }
     saveRouteToStorage();
+
+    const completedCount = currentRoute.numbers.filter(n => currentRoute.scanned.has(String(n))).length;
+    if (completedCount === total) {
+      try {
+        await fetch(`${CONFIG.PROXY_URL}/route/complete`, {
+          method: "POST",
+          headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+          body: JSON.stringify({ date: currentRoute.date, label: currentRoute.type })
+        });
+      } catch (e) {}
+    }
+
     renderRouteStatus();
     renderModalList();
     openRouteModal();
@@ -267,7 +281,7 @@ async function closeRoute() {
       `Маршрут закрыт.\n\n` +
       `Успешно: ${successCount}\n` +
       `Ошибок при смене статуса: ${failedCount}\n` +
-      `Не просканировано: ${total - currentRoute.scanned.size}`
+      `Не просканировано: ${Math.max(0, total - currentRoute.numbers.filter(n => currentRoute.scanned.has(String(n))).length)}`
     );
   } catch (e) {
     body.textContent = "Не удалось закрыть маршрут — проверьте интернет. Список сканирования сохранён.";
@@ -320,34 +334,16 @@ async function doLogin() {
   const errEl = document.getElementById("login-error");
   errEl.textContent = "";
   if (!login || !pass) { errEl.textContent = "Заполните логин и пароль"; return; }
-  
   const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
-  
   try {
-    // 1. Отправляем запрос на правильный эндпоинт /login методом POST
-    const res = await fetch(`${CONFIG.PROXY_URL}/login`, { 
-      method: "POST",
-      headers: { Authorization: authHeader } 
-    });
-    
+    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=__login_check__`, { headers: { Authorization: authHeader } });
     if (res.status === 401) { errEl.textContent = "Неверный логин или пароль"; return; }
-    if (res.status === 403) { errEl.textContent = "Доступ к приложению запрещён"; return; }
-    if (!res.ok) { errEl.textContent = "Не удалось связаться с сервером. Проверьте адрес прокси в config.js"; return; }
-    
-    // 2.
-    const data = await res.json();
-    const bearerToken = "Bearer " + data.token;
-    
-    // 3.
-    localStorage.setItem("sklad_auth", bearerToken);
-    localStorage.setItem("sklad_user", login);
-    localStorage.setItem("sklad_auth_day", getBusinessDayKey());
-    
-    enterScanScreen();
-  } catch (e) { 
-    errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js"; 
-    return; 
-  }
+    if (!res.ok) { errEl.textContent = "Не удалось связаться с сервером."; return; }
+  } catch (e) { errEl.textContent = "Нет соединения с прокси."; return; }
+  localStorage.setItem("sklad_auth", authHeader);
+  localStorage.setItem("sklad_user", login);
+  localStorage.setItem("sklad_auth_day", getBusinessDayKey());
+  enterScanScreen();
 }
 
 function logout() {
@@ -382,7 +378,7 @@ function startScanner() {
       formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
     },
       (decodedText) => onScanSuccess(decodedText), () => {})
-      .catch(() => showCameraError(readerEl, "Не удалось запустить камеру. Разрешите доступ к камере в браузере."));
+      .catch(() => showCameraError(readerEl, "Разрешите доступ к камере в браузере."));
   }).catch(() => showCameraError(readerEl, "Нет доступа к камере"));
 }
 
@@ -578,7 +574,7 @@ async function confirmShip() {
     const data = await res.json();
     if (data.ok) {
       if (currentRoute && currentRoute.closedAt && currentRoute.numbers.includes(currentResult.name)) {
-        currentRoute.scanned.add(currentResult.name);
+        currentRoute.scanned.add(String(currentResult.name));
         currentRoute.scannedItems[currentResult.name] = { id: currentResult.id, name: currentResult.name, places: currentResult.places, shipped: true };
         saveRouteToStorage();
         renderRouteStatus();
