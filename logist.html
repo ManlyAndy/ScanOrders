@@ -71,6 +71,14 @@
 
   <button class="btn-success" id="send-btn" style="display:none;" onclick="sendRoute()">Отправить маршрут</button>
   <div id="send-result"></div>
+
+  <div class="card" style="margin-top:20px;">
+    <h2 style="font-size:18px;margin-top:0;">Отгруженные ранее</h2>
+    <label>Выберите дату</label>
+    <input id="history-date" type="date">
+    <button class="btn-primary" onclick="loadRouteHistory()">Показать маршруты</button>
+    <div id="history-result" class="hint"></div>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
