@@ -25,6 +25,8 @@
   .chip { background: #374151; padding: 6px 10px; border-radius: 999px; font-size: 13px; }
   .hint { font-size: 13px; color: #9ca3af; }
   label { font-size: 13px; color: #9ca3af; }
+  select:disabled { opacity: 0.85; color: #f3f4f6; }
+  button:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
@@ -43,16 +45,16 @@
     <button class="link-btn" style="width:auto;background:none;color:#93c5fd;text-decoration:underline;padding:4px;margin-bottom:10px;" onclick="logout()">Выйти</button>
   </div>
 
-  <label>Дата отгрузки</label>
-  <input id="route-date" type="date">
+  <label>Дата отгрузки (подставляется из названия файла)</label>
+  <input id="route-date" type="text" inputmode="numeric" placeholder="например 28.08.2026" autocomplete="off">
 
-  <label>Тип маршрута</label>
+  <label>Тип маршрута (определяется по названию файла: МСК или ТК)</label>
   <select id="route-label">
     <option value="МСК">МСК</option>
     <option value="ТК">ТК</option>
   </select>
 
-  <label>PDF со списком отгрузок (из печати в МойСклад)</label>
+  <label>PDF со списком отгрузок. В названии файла должны быть тип и дата, например: МСК_28.08.pdf</label>
   <input id="pdf-file" type="file" accept="application/pdf">
 
   <div id="parse-status" class="hint"></div>
@@ -61,6 +63,11 @@
     <b id="preview-count"></b>
     <div id="preview-chips" class="chip-list"></div>
   </div>
+
+  <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+    <input id="replace-route" type="checkbox" style="width:auto;margin:0;">
+    Заменить маршрут целиком (новые номера добавляются к уже загруженным)
+  </label>
 
   <button class="btn-success" id="send-btn" style="display:none;" onclick="sendRoute()">Отправить маршрут</button>
   <div id="send-result"></div>
