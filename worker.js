@@ -9,11 +9,17 @@ const SESSION_TTL = 28800;
 const ROUTE_TTL = 15552000; // 180 дней
 
 const ALLOWED_MS_LOGINS = new Set([
-  "kovalkov@boss191"
+  "kovalkov@boss191",
+  "harunin@boss191",
+  "grishaev@boss191",
+  "absaluttinova@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 const ALLOWED_ROUTE_LOGINS = new Set([
-  "kovalkov@boss191"
+   "kovalkov@boss191",
+  "harunin@boss191",
+  "grishaev@boss191",
+  "absaluttinova@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
