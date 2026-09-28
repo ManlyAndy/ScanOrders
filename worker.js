@@ -6,19 +6,14 @@ const BITRIX_CHAT_ID = 11359;
 const BITRIX_DIALOG_ID = `chat${BITRIX_CHAT_ID}`;
 const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 const SESSION_TTL = 28800;
+const ROUTE_TTL = 15552000; // 180 дней
 
 const ALLOWED_MS_LOGINS = new Set([
-  "kovalkov@boss191",
-  "harunin@boss191",
-  "grishaev@boss191",
-  "absaluttinova@boss191"
+  "kovalkov@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 const ALLOWED_ROUTE_LOGINS = new Set([
-  "kovalkov@boss191",
-  "harunin@boss191",
-  "grishaev@boss191",
-  "absaluttinova@boss191"
+  "kovalkov@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
@@ -85,7 +80,7 @@ async function getSessionAuth(request, env) {
 }
 
 function unauthorized() {
-  return json({ error: "Сессия недействительна" }, 401);
+  return json({ error: "Сессия недействительна или истекла" }, 401);
 }
 
 async function handleLogin(request, env) {
@@ -112,17 +107,21 @@ export default {
     if (!auth) return unauthorized();
 
     const username = getBasicUsername(auth);
-    if (!isAllowedLogin(username)) return json({ error: "Доступ запрещён" }, 403);
+    if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
 
     try {
       if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
       if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
       if (url.pathname === "/finish" && request.method === "POST") return await handleFinish(request, auth);
       if (url.pathname === "/route" && request.method === "POST") {
-        if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет прав" }, 403);
+        if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
         return await handleRouteUpload(request, auth, env);
       }
       if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
+      if (url.pathname === "/route/complete" && request.method === "POST") {
+        if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
+        return await handleRouteComplete(request, auth, env);
+      }
       if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
     } catch {
       return json({ error: "Внутренняя ошибка" }, 500);
@@ -225,7 +224,7 @@ async function handleShip(request, auth) {
 
 async function handleFinish(request, auth) {
   const body = await request.json();
-  const ids = Array.isArray(body.items) ? [...new Set(body.items.map(x => x && x.id).filter(Boolean))].slice(0, 100) : [];
+  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(Boolean))].slice(0, 100) : [];
   if (!ids.length) return json({ error: "Список отгрузок пуст" }, 400);
 
   const results = [];
@@ -307,7 +306,7 @@ async function handleRouteUpload(request, auth, env) {
   const items = Array.isArray(existing?.items) ? existing.items : [];
   const filtered = items.filter(item => item.label !== label);
   filtered.push(...numbers.map(number => ({ number, label })));
-  await env.ROUTES.put(key, JSON.stringify({ date, items: filtered }));
+  await env.ROUTES.put(key, JSON.stringify({ date, items: filtered, completedRoutes: existing?.completedRoutes || {} }), { expirationTtl: ROUTE_TTL });
 
   return json({ ok: true, count: filtered.length });
 }
@@ -322,201 +321,25 @@ async function handleRouteGet(url, auth, env) {
   return json(data ? { found: true, ...data } : { found: false, date });
 }
 
+async function handleRouteComplete(request, auth, env) {
+  if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  const body = await request.json();
+  const date = String(body.date || "").trim();
+  const label = String(body.label || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !label) return json({ error: "Неверные данные маршрута" }, 400);
+  const key = routeKey(date);
+  const data = await env.ROUTES.get(key, { type: "json" });
+  if (!data || !Array.isArray(data.items)) return json({ error: "Маршрут не найден" }, 404);
+  const completedRoutes = data.completedRoutes && typeof data.completedRoutes === "object" ? data.completedRoutes : {};
+  completedRoutes[label] = new Date().toISOString();
+  await env.ROUTES.put(key, JSON.stringify({ ...data, completedRoutes }), { expirationTtl: ROUTE_TTL });
+  return json({ ok: true, date, label, completedAt: completedRoutes[label] });
+}
+
 async function handlePhoto(url, auth, env) {
-  if (!env.BITRIX_WEBHOOK_URL) {
-    return json({
-      error: "Интеграция с Bitrix24 не настроена"
-    }, 500);
-  }
-
-  const ok = await verifyAuth(auth);
-  if (!ok) return json({ error: "Неверный логин или пароль" }, 401);
-
   const number = (url.searchParams.get("number") || "").trim();
-  if (!number) {
-    return json({ error: "Не передан номер отгрузки" }, 400);
-  }
-
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-
-  try {
-    // Ищем номер
-    const searchRes = await fetch(
-      `${webhook}/im.dialog.messages.search.json`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          CHAT_ID: BITRIX_CHAT_ID,
-          SEARCH_MESSAGE: number,
-          ORDER: { ID: "DESC" },
-          LIMIT: 20,
-        }),
-      }
-    );
-
-    if (!searchRes.ok) {
-      return json({
-        error: "Bitrix24 недоступен при поиске сообщения",
-        status: searchRes.status,
-      }, 502);
-    }
-
-    const searchData = await searchRes.json();
-
-    if (searchData.error) {
-      return json({
-        error: `Ошибка Bitrix24: ${
-          searchData.error_description || searchData.error
-        }`
-      }, 502);
-    }
-
-    const result = searchData.result || {};
-
-    const messages = Array.isArray(result.messages)
-      ? result.messages
-      : [];
-
-    
-    const files = Array.isArray(result.files)
-      ? result.files
-      : [];
-
-    const normalizedNumber = number.toLowerCase();
-
-    const matchingMessages = messages.filter((message) => {
-      const text = String(message.text || "").trim().toLowerCase();
-
-      return (
-        text === normalizedNumber ||
-        text.includes(normalizedNumber)
-      );
-    });
-
-    if (!matchingMessages.length) {
-      return json({
-        found: false,
-        chatId: BITRIX_CHAT_ID,
-        dialogId: BITRIX_DIALOG_ID,
-        number,
-        debug: {
-          messagesFound: messages.length,
-          messages: messages.slice(0, 10).map((m) => ({
-            id: m.id,
-            text: m.text,
-            date: m.date
-          }))
-        }
-      });
-    }
-
-    
-    const message = matchingMessages[0];
-
-  
-    let messageFiles = files.filter((file) => {
-      const fileMessageId =
-        file.messageId ??
-        file.message_id ??
-        file.MESSAGE_ID ??
-        null;
-
-      return fileMessageId == null ||
-             Number(fileMessageId) === Number(message.id);
-    });
-
-   
-    const imageFiles = messageFiles.filter((file) => {
-      const type = String(file.type || "").toLowerCase();
-      const extension = String(file.extension || "").toLowerCase();
-
-      return (
-        type === "image" ||
-        ["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(extension)
-      );
-    });
-
-   
-    const images = [];
-
-    for (const file of imageFiles) {
-      let publicUrl = null;
-
-      try {
-        const diskRes = await fetch(
-          `${webhook}/disk.file.get.json`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: file.id }),
-          }
-        );
-
-        if (diskRes.ok) {
-          const diskData = await diskRes.json();
-
-          if (diskData.result) {
-            publicUrl =
-              diskData.result.DOWNLOAD_URL ||
-              diskData.result.DETAIL_URL ||
-              null;
-          }
-        }
-      } catch (e) {}
-
-      const finalUrl =
-        publicUrl ||
-        file.urlShow ||
-        file.urlPreview ||
-        file.urlDownload ||
-        null;
-
-      if (finalUrl) {
-        images.push({
-          id: file.id,
-          name: file.name || `photo-${file.id}`,
-          url: finalUrl,
-          type: file.type || "image",
-        });
-      }
-    }
-
-    if (!images.length) {
-      return json({
-        found: false,
-        chatId: BITRIX_CHAT_ID,
-        dialogId: BITRIX_DIALOG_ID,
-        number,
-        messageId: message.id,
-        messageText: message.text || "",
-        debug: {
-          filesFromSearch: files.length,
-          files: files.map((f) => ({
-            id: f.id,
-            name: f.name,
-            type: f.type,
-            extension: f.extension
-          }))
-        }
-      });
-    }
-
-    return json({
-      found: true,
-      chatId: BITRIX_CHAT_ID,
-      dialogId: BITRIX_DIALOG_ID,
-      number,
-      messageId: message.id,
-      messageText: message.text || "",
-      url: images[0].url,
-      images,
-    });
-
-  } catch (e) {
-    return json({
-      error: "Не удалось связаться с Bitrix24",
-      details: String(e)
-    }, 500);
-  }
+  if (!number) return json({ error: "Не передан номер" }, 400);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  return json({ ok: false, error: "Фото не поддерживается этим Worker" }, 501);
 }
