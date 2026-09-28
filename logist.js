@@ -96,6 +96,7 @@ window.addEventListener("load", () => {
   $("route-date").addEventListener("change", onDateEdited);
   $("route-date").addEventListener("blur", onDateEdited);
   $("pdf-file").addEventListener("change", handleFile);
+  $("history-date").value = getBusinessDayKey();
   if (getSavedAuth()) {
     $("screen-login").style.display = "none";
     $("screen-main").style.display = "block";
@@ -259,5 +260,48 @@ async function sendRoute() {
     resultEl.innerHTML = '<p class="error">Нет соединения с сервером.</p>';
   } finally {
     btn.disabled = false;
+  }
+}
+
+
+// ---------- АРХИВ ОТГРУЖЕННЫХ МАРШРУТОВ ----------
+
+function renderHistoryRoute(label, route) {
+  const items = Array.isArray(route.items) ? route.items.filter(i => i.label === label) : [];
+  const title = `Маршрут «${esc(label)}» · ${items.length} отгрузок`;
+  if (!route.completed) {
+    return `<div class="card"><b>${title}</b><p class="hint">Маршрут на эту дату сохранён, но ещё не закрыт полностью.</p></div>`;
+  }
+  const nums = items.map(i => esc(i.number)).join(", ");
+  return `<div class="card"><b>${title}</b><p class="ok-msg">Отгружен: ${route.completedAt ? new Date(route.completedAt).toLocaleString("ru-RU") : "дата не указана"}</p><div class="chip-list">${nums ? nums.split(", ").map(n => `<span class="chip">№ ${n}</span>`).join("") : ""}</div></div>`;
+}
+
+async function loadRouteHistory() {
+  const token = getSavedAuth();
+  if (!token) return;
+  const el = $("history-result");
+  const date = $("history-date").value;
+  if (!date) { el.innerHTML = '<span class="error">Выберите дату.</span>'; return; }
+  el.textContent = "Загружаю…";
+  try {
+    const r = await fetch(`${CONFIG.PROXY_URL}/route?date=${encodeURIComponent(date)}&_=${Date.now()}`, {
+      headers: { Authorization: "Bearer " + token }, cache: "no-store"
+    });
+    if (r.status === 401) { logout(); return; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { el.innerHTML = `<span class="error">${esc(d.error || "Не удалось загрузить маршрут")}</span>`; return; }
+    if (!d.found || !Array.isArray(d.items) || !d.items.length) {
+      el.textContent = `На ${fmtDate(date)} маршрутов нет.`;
+      return;
+    }
+    const labels = [...new Set(d.items.map(i => i.label).filter(Boolean))];
+    const completedLabels = labels.filter(label => d.completedRoutes?.[label]);
+    if (!completedLabels.length) {
+      el.textContent = `На ${fmtDate(date)} нет полностью отгруженных маршрутов.`;
+      return;
+    }
+    el.innerHTML = completedLabels.map(label => renderHistoryRoute(label, { ...d, completed: true, completedAt: d.completedRoutes[label] })).join("");
+  } catch (e) {
+    el.innerHTML = '<span class="error">Нет соединения с сервером.</span>';
   }
 }
