@@ -1,43 +1,280 @@
-const CACHE_NAME = "sklad-scanner-shell-v8";
-const SHELL_FILES = [
-  "./index.html",
-  "./app.js",
-  "./config.js",
-  "./manifest.json",
-  "./icon-192.png",
-  "./icon-512.png",
-  "./apple-touch-icon.png",
-  "./favicon-32.png",
-];
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Контроль отгрузок</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Отгруженные">
+<meta name="theme-color" content="#111827">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: #111827;
+    color: #f3f4f6;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .screen { display: none; flex: 1; flex-direction: column; padding: 20px; }
+  .screen.active { display: flex; }
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_FILES))
-  );
-  self.skipWaiting();
-});
+  h1 { font-size: 20px; margin: 0 0 16px; }
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
-  );
-  self.clients.claim();
-});
+  input {
+    width: 100%;
+    padding: 14px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    border: 1px solid #374151;
+    background: #1f2937;
+    color: #f3f4f6;
+    font-size: 16px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 10px;
+  }
+  .btn-primary { background: #2563eb; color: white; }
+  .btn-secondary { background: #374151; color: #f3f4f6; }
+  .btn-success { background: #16a34a; color: white; }
+  .btn-danger { background: #dc2626; color: white; }
+  .error { color: #f87171; font-size: 14px; margin-top: 6px; min-height: 18px; }
 
-self.addEventListener("fetch", (event) => {
-  const isShellFile = SHELL_FILES.some((f) => event.request.url.includes(f.replace("./", "")));
-  if (!isShellFile) return;
+  /* Компактная область камеры: сканирование остаётся главным экраном, но не занимает весь телефон. */
+  #reader {
+    width: 100%;
+    height: 300px !important;
+    min-height: 300px !important;
+    max-height: 300px !important;
+    border-radius: 12px;
+    overflow: hidden !important;
+    margin: 0 0 12px;
+    background: #000;
+  }
+  #reader__scan_region {
+    height: 300px !important;
+    min-height: 300px !important;
+    max-height: 300px !important;
+    overflow: hidden !important;
+  }
+  #reader video {
+    width: 100% !important;
+    height: 300px !important;
+    max-height: 300px !important;
+    object-fit: cover !important;
+    display: block;
+  }
+  #reader__scan_region img { display: none !important; }
+  #reader__dashboard_section { padding: 4px 0 0 !important; }
+  #reader__dashboard_section_csr button { margin-bottom: 6px; }
+  #reader__dashboard_section_csr select { max-width: 100%; }
 
-  event.respondWith(
-    fetch(event.request)
-      .then((fresh) => {
-    
-        const clone = fresh.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        return fresh;
-      })
-      .catch(() => caches.match(event.request)) 
-  );
-});
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .topbar .who { font-size: 13px; color: #9ca3af; }
+  .link-btn {
+    background: none; border: none; color: #93c5fd; width: auto; padding: 4px;
+    text-decoration: underline; font-size: 13px;
+  }
+
+  .card {
+    background: #1f2937;
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .card.ok { border: 2px solid #16a34a; }
+  .card.bad { border: 2px solid #dc2626; }
+  .card .badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .badge.ok { background: #14532d; color: #86efac; }
+  .badge.bad { background: #7f1d1d; color: #fca5a5; }
+
+  .card .num { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .card .meta { font-size: 14px; color: #d1d5db; margin-bottom: 4px; }
+  .card .meta b { color: #f3f4f6; }
+
+  .spinner {
+    border: 3px solid #374151;
+    border-top: 3px solid #2563eb;
+    border-radius: 50%;
+    width: 28px; height: 28px;
+    animation: spin 0.8s linear infinite;
+    margin: 20px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hint { font-size: 13px; color: #9ca3af; text-align: center; margin-top: 8px; }
+
+  .scan-title { margin: 2px 0 10px; }
+  .section-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .manual-section { margin-top: 0; }
+
+  .type-toggle { display: flex; gap: 8px; margin: 10px 0; }
+  .type-btn {
+    flex: 1; margin-bottom: 0; padding: 10px; border-radius: 8px;
+    border: 1px solid #374151; background: #111827; color: #9ca3af;
+    font-size: 14px; font-weight: 600;
+  }
+  .type-btn.active { background: #2563eb; color: white; border-color: #2563eb; }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal-box {
+    background: #1f2937;
+    width: 100%;
+    max-width: 480px;
+    max-height: 80vh;
+    border-radius: 16px 16px 0 0;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 700;
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .modal-list {
+    overflow-y: auto;
+    overflow-x: auto;
+    flex: 1;
+    margin-bottom: 12px;
+    column-width: 150px;
+    column-gap: 8px;
+    column-fill: auto;
+    max-height: 480px; /* примерно 10 строк на колонку при высоте строки ~46px */
+  }
+  .modal-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    background: #111827;
+    font-size: 15px;
+    break-inside: avoid;
+  }
+  .modal-row.scanned {
+    background: #14532d;
+    color: #86efac;
+  }
+  .modal-row .check { font-weight: 700; }
+  .modal-row .error-detail { font-size: 12px; color: #fca5a5; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ЭКРАН 1: ВХОД -->
+<div id="screen-login" class="screen active">
+  <h1>Вход — Контроль отгрузок</h1>
+  <p class="hint" style="margin-bottom:16px; text-align:left;">
+    Введите ваш обычный логин и пароль от МойСклад. Повторный вход не потребуется до следующего рабочего дня (после 07:00). Данные сохраняются только на этом телефоне.
+  </p>
+  <input id="login-user" type="text" placeholder="Логин (email) в МойСклад" autocomplete="username">
+  <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
+  <button class="btn-primary" onclick="doLogin()">Войти</button>
+  <div id="login-error" class="error"></div>
+</div>
+
+<!-- ЭКРАН 2: СКАНЕР -->
+<div id="screen-scan" class="screen">
+  <div class="topbar">
+    <span class="who" id="who-label"></span>
+    <button class="link-btn" onclick="logout()">Выйти</button>
+  </div>
+
+  <!-- СКАНИРОВАНИЕ: сверху, сразу после шапки -->
+  <h1 class="scan-title">Сканируйте штрихкод отгрузки</h1>
+  <div id="reader"></div>
+
+  <!-- МАРШРУТЫ: ниже камеры -->
+  <div class="card" id="route-card">
+    <div class="section-title">Маршруты</div>
+    <div id="route-status" class="hint">Маршрут не загружен — сканирование только по статусу</div>
+    <p class="hint" style="margin-top:6px; margin-bottom:10px;">МСК / ТК переключают списки. В маршруте сканирование только отмечает отгрузки; статус меняется после «Закрыть маршрут».</p>
+    <div class="type-toggle">
+      <button class="type-btn active" id="type-btn-МСК" onclick="selectRouteType('МСК')">МСК</button>
+      <button class="type-btn" id="type-btn-ТК" onclick="selectRouteType('ТК')">ТК</button>
+    </div>
+    <button class="btn-secondary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
+    <button class="btn-secondary" id="show-list-btn" style="display:none;" onclick="openRouteModal()">Показать список</button>
+    <button class="btn-success" id="close-route-btn" style="display:none;" onclick="closeRoute()">Закрыть маршрут</button>
+    <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Сбросить список (только на этом телефоне)</button>
+  </div>
+
+  <!-- РУЧНОЙ ВВОД: последним -->
+  <div class="manual-section">
+    <div class="section-title">Ручной ввод</div>
+    <button class="btn-secondary" onclick="showManualInput()">Ввести номер вручную</button>
+    <div id="manual-input-wrap" style="display:none;">
+      <input id="manual-input" type="text" placeholder="Номер отгрузки, напр. 26715" inputmode="numeric">
+      <button class="btn-primary" onclick="submitManual()">Найти</button>
+    </div>
+  </div>
+
+  <!-- Модальное окно со списком отгрузок маршрута -->
+  <div id="route-modal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span id="modal-title">Список маршрута</span>
+        <button class="link-btn" onclick="closeRouteModal()">Закрыть окно</button>
+      </div>
+      <div id="modal-list" class="modal-list"></div>
+      <button class="link-btn" onclick="clearRoute(); closeRouteModal();">Сбросить список (только на этом телефоне)</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ЭКРАН 3: РЕЗУЛЬТАТ -->
+<div id="screen-result" class="screen">
+  <div class="topbar">
+    <span class="who" id="who-label-2"></span>
+    <button class="link-btn" onclick="logout()">Выйти</button>
+  </div>
+  <div id="result-body"></div>
+  <button class="btn-secondary" onclick="backToScan()">← Сканировать следующий</button>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
