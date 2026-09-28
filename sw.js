@@ -1,4 +1,4 @@
-const CACHE_NAME = "sklad-scanner-shell-v7";
+const CACHE_NAME = "sklad-scanner-shell-v8";
 const SHELL_FILES = [
   "./index.html",
   "./app.js",
@@ -6,6 +6,8 @@ const SHELL_FILES = [
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
+  "./apple-touch-icon.png",
+  "./favicon-32.png",
 ];
 
 self.addEventListener("install", (event) => {
