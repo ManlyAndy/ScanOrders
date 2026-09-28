@@ -58,12 +58,40 @@ function isAllowedRouteLogin(username) {
   return ALLOWED_ROUTE_LOGINS.has(String(username || "").trim().toLowerCase());
 }
 
+async function checkAuth(auth) {
+  if (!auth?.startsWith("Basic ")) return 401;
+  try {
+    const res = await fetch(`${API_BASE}/context/employee`, {
+      headers: { Authorization: auth, "Accept-Encoding": "gzip" }
+    });
+    return res.status;
+  } catch {
+    return 0;
+  }
+}
+
 async function verifyAuth(auth) {
-  if (!auth?.startsWith("Basic ")) return false;
-  const res = await fetch(`${API_BASE}/entity/employee?limit=1`, {
-    headers: { Authorization: auth }
-  });
-  return res.ok;
+  const status = await checkAuth(auth);
+  return status >= 200 && status < 300;
+}
+
+// Пересобирает заголовок Basic: убирает случайные пробелы вокруг логина/пароля
+// (мобильные клавиатуры часто добавляют пробел в конце).
+function buildAuthVariants(auth) {
+  try {
+    const raw = atob(auth.slice(6));
+    const colon = raw.indexOf(":");
+    if (colon < 0) return [auth];
+    const user = raw.slice(0, colon).trim();
+    const pass = raw.slice(colon + 1);
+    const variants = [
+      "Basic " + btoa(user + ":" + pass),
+      "Basic " + btoa(user + ":" + pass.trim())
+    ];
+    return [...new Set(variants)];
+  } catch {
+    return [auth];
+  }
 }
 
 async function createSession(auth, env) {
@@ -92,8 +120,18 @@ async function handleLogin(request, env) {
   if (!auth.startsWith("Basic ")) return unauthorized();
   const username = getBasicUsername(auth);
   if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
-  if (!(await verifyAuth(auth))) return json({ error: "Неверный логин или пароль" }, 401);
-  const token = await createSession(auth, env);
+  let goodAuth = null;
+  let lastStatus = 401;
+  for (const candidate of buildAuthVariants(auth)) {
+    lastStatus = await checkAuth(candidate);
+    if (lastStatus >= 200 && lastStatus < 300) { goodAuth = candidate; break; }
+    if (lastStatus !== 401) break;
+  }
+  if (!goodAuth) {
+    if (lastStatus === 401) return json({ error: "Неверный логин или пароль" }, 401);
+    return json({ error: `МойСклад не ответил (код ${lastStatus}). Попробуйте ещё раз` }, 502);
+  }
+  const token = await createSession(goodAuth, env);
   if (!token) return json({ error: "Сервер авторизации не настроен" }, 500);
   return json({ ok: true, token, expiresIn: SESSION_TTL, user: username });
 }
