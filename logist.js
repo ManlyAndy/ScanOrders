@@ -1,11 +1,11 @@
 // ===========================================================
-// Логика страницы логиста: вход, разбор PDF, отправка маршрута
+// Логика страницы логиста
 // ===========================================================
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-let parsedData = []; // массив {number, places}
+let parsedData = []; // [{number, places}]
 let routeTasks = [];
 let lastSentRoute = null;
 
@@ -124,13 +124,12 @@ async function handleFile(e) {
     const numbers = Array.from(found);
 
     if (!numbers.length) {
-      statusEl.innerHTML = 'Не удалось найти номера отгрузок в этом файле. Проверьте, что это именно "Список отгрузок" из МойСклад.';
+      statusEl.innerHTML = 'Не удалось найти номера отгрузок в этом файле.';
       return;
     }
 
     statusEl.textContent = `Найдено номеров: ${numbers.length}. Загружаю данные о местах…`;
 
-    // Параллельно запрашиваем places для каждого номера
     const auth = getSavedAuth();
     const results = await Promise.all(
       numbers.map(async (num) => {
@@ -158,7 +157,7 @@ async function handleFile(e) {
     document.getElementById("task-btn").style.display = "inline-block";
     document.getElementById("send-btn").style.display = "block";
   } catch (e) {
-    statusEl.innerHTML = 'Не удалось прочитать PDF. Убедитесь, что файл не повреждён.';
+    statusEl.innerHTML = 'Не удалось прочитать PDF.';
   }
 }
 
@@ -215,7 +214,7 @@ function printRoute() {
   if (!lastSentRoute) return;
   const esc = (v) => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const r = lastSentRoute;
-  const items = r.items.map((d, i) => `<tr><td>${i + 1}</td><td>№ ${esc(d.number)}</td><td>${d.places || "—"}</td></tr>`).join("");
+  const items = r.items.map((d, i) => `<tr><td>${i + 1}</td><td>№ ${esc(d.number)}</td><td>${d.places ?? "—"}</td></tr>`).join("");
   const tasks = r.tasks.length
     ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("")
     : '<li><em>Дополнительных заданий нет</em></li>';
@@ -240,7 +239,7 @@ ul{margin:0;padding-left:20px;}
 <table><thead><tr><th>№</th><th>Отгрузка</th><th>Мест</th></tr></thead><tbody>${items}</tbody></table>
 <h2>Дополнительные задания</h2>
 <ul>${tasks}</ul>
-<script>window.onload=()=>window.print();</script>
+<script>window.onload=()=>window.print();<\/script>
 </body></html>`);
   w.document.close();
 }
@@ -256,7 +255,7 @@ async function loadHistory() {
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
 
-    if (!data.ok || !data.dates.length) {
+    if (!data.ok || !data.dates || !data.dates.length) {
       listEl.innerHTML = '<div class="hint">История пуста</div>';
       return;
     }
@@ -297,16 +296,16 @@ async function showRouteDetails(date) {
     const tasksByLabel = data.tasksByLabel || {};
 
     let html = `<div style="margin-bottom:12px;"><strong>Маршрут на ${date}</strong></div>`;
-    
+
     for (const [label, numbers] of Object.entries(labels)) {
-      html += `<div class="history-item" style="cursor:default;">
+      html += `<div class="history-item static">
         <div class="history-date">${label} (${numbers.length} отгрузок)</div>
         <div class="history-labels">${numbers.map(n => `№${n}`).join(", ")}</div>`;
-      
+
       if (tasksByLabel[label] && tasksByLabel[label].length) {
         html += `<div style="margin-top:8px;font-size:0.9em;color:#555;"><strong>Задания:</strong> ${tasksByLabel[label].join("; ")}</div>`;
       }
-      
+
       html += `</div>`;
     }
 
