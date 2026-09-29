@@ -378,3 +378,100 @@ async function handleRoutesList(auth, env) {
   if (!(await verifyAuth(auth))) return unauthorized();
 
   const list = await env.ROUTES.list({ prefix: "route:" });
+  const dates = list.keys
+    .map(k => k.name.replace("route:", ""))
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort()
+    .reverse();
+
+  return json({ ok: true, dates });
+}
+
+async function handleRouteComplete(request, auth, env) {
+  if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+
+  const body = await request.json();
+  const date = String(body.date || "").trim();
+  const label = String(body.label || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !label) return json({ error: "Неверные данные маршрута" }, 400);
+
+  const key = routeKey(date);
+  const data = await env.ROUTES.get(key, { type: "json" });
+  if (!data || !Array.isArray(data.items)) return json({ error: "Маршрут не найден" }, 404);
+
+  const completedRoutes = data.completedRoutes && typeof data.completedRoutes === "object" ? data.completedRoutes : {};
+  completedRoutes[label] = new Date().toISOString();
+
+  await env.ROUTES.put(key, JSON.stringify({ ...data, completedRoutes }), { expirationTtl: ROUTE_TTL });
+  return json({ ok: true, date, label, completedAt: completedRoutes[label] });
+}
+
+async function handlePhoto(url, auth, env) {
+  const number = (url.searchParams.get("number") || "").trim();
+  if (!number) return json({ error: "Не передан номер" }, 400);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  return json({ ok: false, error: "Просмотр фото не поддерживается этим Worker" }, 501);
+}
+
+async function bitrixCall(webhook, method, payload) {
+  const r = await fetch(`${webhook}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.error) throw new Error(data.error_description || data.error || `Bitrix ${r.status}`);
+  return data;
+}
+
+async function handlePhotoUpload(request, auth, env) {
+  if (!env.BITRIX_WEBHOOK_URL) return json({ error: "Интеграция с Bitrix24 не настроена (BITRIX_WEBHOOK_URL)" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+
+  const body = await request.json();
+  const number = String(body.number || "").trim();
+  const photos = Array.isArray(body.photos) ? body.photos : [];
+  const by = String(body.by || "").trim();
+
+  if (!number) return json({ error: "Не передан номер отгрузки" }, 400);
+  if (!photos.length) return json({ error: "Нет фотографий" }, 400);
+  if (photos.length > 10) return json({ error: "За один раз можно загрузить максимум 10 фото" }, 400);
+
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+  const caption = `Отгрузка №${number}${by ? ` (загрузил: ${by})` : ""}`;
+  let uploaded = 0;
+  const results = [];
+
+  for (let i = 0; i < photos.length; i++) {
+    const p = photos[i];
+    if (!p?.content) continue;
+    const name = String(p.name || `order-${number}-${i + 1}.jpg`).replace(/[^a-zA-Z0-9А-Яа-я._-]/g, "_");
+    const data = await bitrixCall(webhook, "im.v2.File.upload", {
+      dialogId: BITRIX_DIALOG_ID,
+      fields: { name, content: p.content, message: caption }
+    });
+    uploaded++;
+    results.push({ name, result: data.result });
+  }
+
+  return json({ ok: true, number, uploaded, results });
+}
+
+async function handleBitrixTest(auth, env) {
+  if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "BITRIX_WEBHOOK_URL не задан" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+  try {
+    const data = await bitrixCall(webhook, "im.dialog.get", { DIALOG_ID: BITRIX_DIALOG_ID });
+    return json({
+      ok: true,
+      chatId: BITRIX_CHAT_ID,
+      dialogId: BITRIX_DIALOG_ID,
+      chat: data.result || null,
+      message: "Вебхук имеет доступ к чату."
+    });
+  } catch (e) {
+    return json({ ok: false, chatId: BITRIX_CHAT_ID, dialogId: BITRIX_DIALOG_ID, error: String(e) }, 502);
+  }
+}
