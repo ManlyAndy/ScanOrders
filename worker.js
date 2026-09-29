@@ -141,6 +141,22 @@ function extractPlaces(row) {
 }
 
 function extractDeliveryAddress(row) {
+  // 1. Ищем кастомное поле "Адрес доставки" в attributes (приоритет)
+  const attrs = Array.isArray(row.attributes) ? row.attributes : [];
+  for (let i = 0; i < attrs.length; i++) {
+    const attrName = String(attrs[i].name || "").trim().toLowerCase();
+    if (attrName === "адрес доставки" || attrName === "адрес") {
+      return extractAttrValue(attrs[i].value);
+    }
+  }
+  // 2. Ищем по ключевым словам
+  for (let i = 0; i < attrs.length; i++) {
+    const attrName = String(attrs[i].name || "").toLowerCase();
+    if (attrName.indexOf("адрес") >= 0 || attrName.indexOf("доставк") >= 0) {
+      return extractAttrValue(attrs[i].value);
+    }
+  }
+  // 3. Стандартное поле deliveryAddress (на всякий случай)
   if (row.deliveryAddress) {
     if (typeof row.deliveryAddress === "string") return row.deliveryAddress;
     if (typeof row.deliveryAddress === "object") {
@@ -149,27 +165,21 @@ function extractDeliveryAddress(row) {
       if (row.deliveryAddress.fullAddress) return row.deliveryAddress.fullAddress;
     }
   }
-  if (row.address) {
-    if (typeof row.address === "string") return row.address;
-    if (typeof row.address === "object") {
-      if (row.address.address) return row.address.address;
-      if (row.address.name) return row.address.name;
-    }
-  }
-  const attrs = Array.isArray(row.attributes) ? row.attributes : [];
-  for (let i = 0; i < attrs.length; i++) {
-    const n = String(attrs[i].name || "").toLowerCase();
-    if (n.indexOf("адрес") >= 0 || n.indexOf("доставк") >= 0) {
-      const v = attrs[i].value;
-      if (v) {
-        if (typeof v === "string") return v;
-        if (typeof v === "object" && v.value) return v.value;
-      }
-    }
-  }
   return "";
 }
 
+function extractAttrValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    // МойСклад часто хранит значение как {value: "..."} или {name: "..."}
+    if (value.value !== undefined && typeof value.value !== "object") return String(value.value);
+    if (value.name !== undefined && typeof value.name !== "object") return String(value.name);
+    // Если это ссылка на справочник — берём name
+    if (value.meta && value.name) return String(value.name);
+  }
+  return String(value);
+}
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
   if (!code) return json({ error: "Не передан номер" }, 400);
