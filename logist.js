@@ -1,5 +1,4 @@
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 let parsedNumbers = [];
 let routeTasks = [];
@@ -32,20 +31,17 @@ async function doLogin() {
   var pass = document.getElementById("login-pass").value;
   var errEl = document.getElementById("login-error");
   errEl.textContent = "";
-  if (!login || !pass) {
-    errEl.textContent = "Заполните логин и пароль";
-    return;
-  }
+  if (!login || !pass) { errEl.textContent = "Заполните логин и пароль"; return; }
   var basicAuth = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
   try {
     var controller = new AbortController();
-    var timeoutId = setTimeout(function() { controller.abort(); }, 10000);
+    var tid = setTimeout(function() { controller.abort(); }, 10000);
     var res = await fetch(CONFIG.PROXY_URL + "/login", {
       method: "POST",
       headers: { "Authorization": basicAuth, "Content-Type": "application/json" },
       signal: controller.signal
     });
-    clearTimeout(timeoutId);
+    clearTimeout(tid);
     if (res.status === 401) { errEl.textContent = "Неверный логин или пароль"; return; }
     if (res.status === 403) { errEl.textContent = "У вас нет прав логиста"; return; }
     if (!res.ok) { errEl.textContent = "Ошибка сервера (код " + res.status + ")"; return; }
@@ -57,11 +53,8 @@ async function doLogin() {
     document.getElementById("screen-main").style.display = "block";
   } catch (e) {
     console.error("Ошибка входа:", e);
-    if (e.name === "AbortError") {
-      errEl.textContent = "Превышено время ожидания. Проверьте интернет.";
-    } else {
-      errEl.textContent = "Нет соединения с сервером. Проверьте PROXY_URL в config.js";
-    }
+    if (e.name === "AbortError") errEl.textContent = "Превышено время ожидания. Проверьте интернет.";
+    else errEl.textContent = "Нет соединения с сервером. Проверьте PROXY_URL в config.js";
   }
 }
 
@@ -94,36 +87,23 @@ async function handleFile(e) {
     var regex = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
     var found = new Set();
     var m;
-    while ((m = regex.exec(fullText)) !== null) {
-      found.add(m[1]);
-    }
+    while ((m = regex.exec(fullText)) !== null) found.add(m[1]);
     parsedNumbers = Array.from(found);
-    if (!parsedNumbers.length) {
-      statusEl.innerHTML = "Не удалось найти номера отгрузок.";
-      return;
-    }
+    if (!parsedNumbers.length) { statusEl.innerHTML = "Не удалось найти номера отгрузок."; return; }
     statusEl.innerHTML = "Найдено: " + parsedNumbers.length + ". Нажмите \"Отправить маршрут\".";
     document.getElementById("preview-count").textContent = "Отгрузки (" + parsedNumbers.length + "):";
-    document.getElementById("preview-chips").innerHTML = parsedNumbers.map(function(n) {
-      return "<span class=\"chip\">" + n + "</span>";
-    }).join("");
+    document.getElementById("preview-chips").innerHTML = parsedNumbers.map(function(n) { return "<span class=\"chip\">" + n + "</span>"; }).join("");
     document.getElementById("preview-card").style.display = "block";
     document.getElementById("task-btn").style.display = "inline-block";
     document.getElementById("send-btn").style.display = "block";
-  } catch (e) {
-    statusEl.innerHTML = "Не удалось прочитать PDF.";
-  }
+  } catch (e) { statusEl.innerHTML = "Не удалось прочитать PDF."; }
 }
 
 function openTaskModal() {
   document.getElementById("task-input").value = routeTasks.join("\n");
   document.getElementById("task-modal").style.display = "flex";
 }
-
-function closeTaskModal() {
-  document.getElementById("task-modal").style.display = "none";
-}
-
+function closeTaskModal() { document.getElementById("task-modal").style.display = "none"; }
 function saveTasks() {
   routeTasks = document.getElementById("task-input").value.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean);
   document.getElementById("task-preview").textContent = routeTasks.length ? "Заданий: " + routeTasks.length : "Нет заданий";
@@ -134,25 +114,24 @@ async function sendRoute() {
   var date = document.getElementById("route-date").value;
   var label = document.getElementById("route-label").value.trim();
   var resultEl = document.getElementById("send-result");
-  if (!parsedNumbers || parsedNumbers.length === 0) {
-    resultEl.innerHTML = "<span class=\"error\">Список пуст.</span>";
-    return;
-  }
-  resultEl.textContent = "Шаг 1/2: Загружаю данные (адреса, места)...";
+  if (!parsedNumbers || parsedNumbers.length === 0) { resultEl.innerHTML = "<span class=\"error\">Список пуст.</span>"; return; }
+  resultEl.textContent = "Шаг 1/2: Загружаю адреса и места...";
   try {
     var controller = new AbortController();
-    var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+    var tid = setTimeout(function() { controller.abort(); }, 30000);
     var resDetails = await fetch(CONFIG.PROXY_URL + "/route/details", {
       method: "POST",
       headers: { "Authorization": getSavedAuth(), "Content-Type": "application/json" },
       body: JSON.stringify({ numbers: parsedNumbers }),
       signal: controller.signal
     });
-    clearTimeout(timeoutId);
+    clearTimeout(tid);
     if (resDetails.status === 401) { logout(); return; }
     if (!resDetails.ok) throw new Error("Ошибка получения данных");
     var detailsData = await resDetails.json();
     var enrichedItems = detailsData.details || [];
+    console.log("Получено деталей:", enrichedItems.length);
+    if (enrichedItems.length > 0) console.log("Первая отгрузка:", enrichedItems[0]);
     resultEl.textContent = "Шаг 2/2: Сохраняю маршрут...";
     var resRoute = await fetch(CONFIG.PROXY_URL + "/route", {
       method: "POST",
@@ -170,11 +149,8 @@ async function sendRoute() {
     }
   } catch (e) {
     console.error(e);
-    if (e.name === "AbortError") {
-      resultEl.innerHTML = "<span class=\"error\">Таймаут (30 сек). Проверьте интернет.</span>";
-    } else {
-      resultEl.innerHTML = "<span class=\"error\">Ошибка соединения.</span>";
-    }
+    if (e.name === "AbortError") resultEl.innerHTML = "<span class=\"error\">Таймаут (30 сек). Проверьте интернет.</span>";
+    else resultEl.innerHTML = "<span class=\"error\">Ошибка соединения.</span>";
   }
 }
 
@@ -187,11 +163,57 @@ function printRoute() {
   };
   var r = lastSentRoute;
   var items = r.items.map(function(d) {
-    return "<tr><td class=\"col-num\">№ " + esc(d.number) + "</td><td class=\"col-places\">" + (d.places || "—") + "</td><td class=\"col-address\">" + esc(d.deliveryAddress || "—") + "</td></tr>";
+    var addr = d.deliveryAddress || "";
+    return "<tr><td class=\"col-num\">№ " + esc(d.number) + "</td><td class=\"col-places\">" + (d.places !== null && d.places !== undefined ? d.places : "—") + "</td><td class=\"col-address\">" + (addr.length > 0 ? esc(addr) : "—") + "</td></tr>";
   }).join("");
   var tasks = r.tasks.length ? r.tasks.map(function(t) { return "<li>" + esc(t) + "</li>"; }).join("") : "<li>Нет заданий</li>";
   var w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна."); return; }
   w.document.write("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Маршрут " + esc(r.label) + "</title><style>@page{margin:10mm;size:A4 landscape}body{font-family:Arial,sans-serif;padding:10px;font-size:11px}h1{font-size:16px;margin:0 0 4px}.meta{color:#555;margin-bottom:12px;font-size:12px}table{border-collapse:collapse;width:100%;margin-bottom:16px}th,td{border:1px solid #999;padding:5px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0;font-weight:700}.col-num{width:90px;white-space:nowrap}.col-places{width:60px;text-align:center}.col-address{width:auto}h2{font-size:13px;margin:14px 0 6px}ul{margin:0;padding-left:20px}@media print{body{padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}}</style></head><body><h1>Маршрут: " + esc(r.label) + "</h1><div class=\"meta\">Дата: " + esc(r.date) + "</div><h2>Отгрузки (" + r.items.length + ")</h2><table><thead><tr><th>Отгрузка</th><th>Мест</th><th>Адрес доставки</th></tr></thead><tbody>" + items + "</tbody></table><h2>Дополнительные задания</h2><ul>" + tasks + "</ul><script>window.onload=function(){window.print();}<\/script></body></html>");
   w.document.close();
+}
+
+async function showHistoryForDate() {
+  var date = document.getElementById("history-date").value;
+  var listEl = document.getElementById("history-list");
+  if (!date) { listEl.innerHTML = "<div class=\"hint\">Выберите дату</div>"; return; }
+  listEl.innerHTML = "<div class=\"hint\">Загружаю…</div>";
+  try {
+    var res = await fetch(CONFIG.PROXY_URL + "/route?date=" + date, { headers: { "Authorization": getSavedAuth() } });
+    if (res.status === 401) { logout(); return; }
+    var data = await res.json();
+    if (!data.found) { listEl.innerHTML = "<div class=\"hint\">На " + date + " маршрутов нет</div>"; return; }
+    var labels = {};
+    (data.items || []).forEach(function(it) {
+      if (!labels[it.label]) labels[it.label] = [];
+      labels[it.label].push(it.number);
+    });
+    var tasksByLabel = data.tasksByLabel || {};
+    var completedRoutes = data.completedRoutes || {};
+    var html = "<div style=\"margin-bottom:12px;\"><strong>Маршрут на " + date + "</strong></div>";
+    for (var label in labels) {
+      var numbers = labels[label];
+      var completed = completedRoutes[label];
+      var scannedSet = completed && Array.isArray(completed.scanned) ? new Set(completed.scanned) : null;
+      html += "<div class=\"history-item\"><div class=\"history-date\">" + label + " (" + numbers.length + " отгрузок)";
+      if (completed) html += " <span style=\"color:#2ecc71;font-size:0.85em;\">Закрыт " + new Date(completed.completedAt).toLocaleString("ru-RU") + "</span>";
+      else html += " <span style=\"color:#95a5a6;font-size:0.85em;\">Не закрыт</span>";
+      html += "</div><div class=\"history-labels\">";
+      if (scannedSet) {
+        html += "<div style=\"display:flex;flex-wrap:wrap;gap:6px;\">";
+        numbers.forEach(function(num) {
+          var wasScanned = scannedSet.has(num);
+          html += "<div style=\"display:inline-flex;align-items:center;background:#f9f9f9;padding:4px 8px;border-radius:6px;\"><span>№" + num + "</span><span class=\"status-badge " + (wasScanned ? "status-shipped" : "status-other") + "\">" + (wasScanned ? "✓" : "—") + "</span></div>";
+        });
+        html += "</div>";
+      } else {
+        html += numbers.map(function(n) { return "№" + n; }).join(", ");
+      }
+      if (tasksByLabel[label] && tasksByLabel[label].length) {
+        html += "<div style=\"margin-top:8px;font-size:0.9em;color:#555;\"><strong>Задания:</strong> " + tasksByLabel[label].join("; ") + "</div>";
+      }
+      html += "</div></div>";
+    }
+    listEl.innerHTML = html;
+  } catch (e) { listEl.innerHTML = "<div class=\"hint\">Не удалось загрузить</div>"; }
 }
