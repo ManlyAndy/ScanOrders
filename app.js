@@ -161,11 +161,11 @@ function show(name) {
 }
 
 // ---------- ВХОД ----------
-
 function getSavedAuth() {
-  return localStorage.getItem("sklad_auth"); // хранит "Basic base64(login:pass)"
+  // теперь храним Bearer-токен, а не Basic
+  const token = localStorage.getItem("sklad_token");
+  return token ? `Bearer ${token}` : null;
 }
-
 function getSavedUser() {
   return localStorage.getItem("sklad_user") || "";
 }
@@ -181,33 +181,46 @@ async function doLogin() {
     return;
   }
 
-  const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
+  const basicAuth = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
 
-  // Проверяем логин/пароль лёгким запросом через прокси (ищем заведомо несуществующий номер)
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=__login_check__`, {
-      headers: { Authorization: authHeader },
+    const res = await fetch(`${CONFIG.PROXY_URL}/login`, {
+      method: "POST",
+      headers: {
+        "Authorization": basicAuth,
+        "Content-Type": "application/json"
+      },
     });
+
     if (res.status === 401) {
       errEl.textContent = "Неверный логин или пароль";
       return;
     }
-    if (!res.ok) {
-      errEl.textContent = "Не удалось связаться с сервером. Проверьте адрес прокси в config.js";
+    if (res.status === 403) {
+      errEl.textContent = "Доступ к приложению запрещён";
       return;
     }
+    if (!res.ok) {
+      errEl.textContent = "Не удалось связаться с сервером";
+      return;
+    }
+
+    const data = await res.json();
+    if (!data.ok || !data.token) {
+      errEl.textContent = data.error || "Сервер не вернул токен";
+      return;
+    }
+
+    localStorage.setItem("sklad_token", data.token);
+    localStorage.setItem("sklad_user", data.user || login);
+    enterScanScreen();
   } catch (e) {
     errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js";
-    return;
   }
-
-  localStorage.setItem("sklad_auth", authHeader);
-  localStorage.setItem("sklad_user", login);
-  enterScanScreen();
 }
 
 function logout() {
-  localStorage.removeItem("sklad_auth");
+  localStorage.removeItem("sklad_token");
   localStorage.removeItem("sklad_user");
   stopScanner();
   show("login");
