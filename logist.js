@@ -14,6 +14,17 @@ function getSavedAuth() {
   return token ? `Bearer ${token}` : null;
 }
 
+function getSavedUser() {
+  return localStorage.getItem("sklad_user") || "";
+}
+
+function logout() {
+  localStorage.removeItem("sklad_token");
+  localStorage.removeItem("sklad_user");
+  document.getElementById("screen-login").style.display = "block";
+  document.getElementById("screen-main").style.display = "none";
+}
+
 window.addEventListener("load", () => {
   document.getElementById("route-date").valueAsDate = new Date();
   if (getSavedAuth()) {
@@ -43,6 +54,7 @@ async function doLogin() {
         "Content-Type": "application/json"
       },
     });
+
     if (res.status === 401) {
       errEl.textContent = "Неверный логин или пароль";
       return;
@@ -97,11 +109,10 @@ async function handleFile(e) {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      const pageText = content.items.map((it) => it.str).join(" ");
+      const pageText = content.items.map(it => it.str).join(" ");
       fullText += pageText + "\n";
     }
 
-    // Номер отгрузки: число, за которым идёт "Да" или "Нет" и дата ДД.ММ.ГГГГ
     const regex = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
     const found = new Set();
     let m;
@@ -112,11 +123,11 @@ async function handleFile(e) {
     parsedNumbers = Array.from(found);
 
     if (!parsedNumbers.length) {
-      statusEl.innerHTML = '<span class="error">Не удалось найти номера отгрузок в этом файле. Проверьте, что это именно "Список отгрузок" из МойСклад.</span>';
+      statusEl.innerHTML = 'Не удалось найти номера отгрузок в этом файле. Проверьте, что это именно "Список отгрузок" из МойСклад.';
       return;
     }
 
-    statusEl.innerHTML = `<span class="ok-msg">Найдено номеров: ${parsedNumbers.length}</span>`;
+    statusEl.innerHTML = `Найдено номеров: ${parsedNumbers.length}`;
     document.getElementById("preview-count").textContent = `Отгрузки в маршруте (${parsedNumbers.length}):`;
     document.getElementById("preview-chips").innerHTML = parsedNumbers
       .map((n) => `<span class="chip">${n}</span>`)
@@ -125,7 +136,7 @@ async function handleFile(e) {
     document.getElementById("task-btn").style.display = "inline-block";
     document.getElementById("send-btn").style.display = "block";
   } catch (e) {
-    statusEl.innerHTML = '<span class="error">Не удалось прочитать PDF. Убедитесь, что файл не повреждён.</span>';
+    statusEl.innerHTML = 'Не удалось прочитать PDF. Убедитесь, что файл не повреждён.';
   }
 }
 
@@ -167,23 +178,45 @@ async function sendRoute() {
     if (data.ok) {
       lastSentRoute = { date, label, numbers: [...parsedNumbers], tasks: [...routeTasks] };
       document.getElementById("print-btn").style.display = "inline-block";
-      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок: ${data.count}. Заданий: ${routeTasks.length}.</p>`;
+      resultEl.innerHTML = `Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок: ${data.count}. Заданий: ${routeTasks.length}.`;
     } else {
-      resultEl.innerHTML = `<p class="error">${data.error || "Не удалось отправить маршрут"}</p>`;
+      resultEl.innerHTML = data.error || "Не удалось отправить маршрут";
     }
   } catch (e) {
-    resultEl.innerHTML = '<p class="error">Нет соединения с сервером.</p>';
+    resultEl.innerHTML = 'Нет соединения с сервером.';
   }
 }
 
 function printRoute() {
   if (!lastSentRoute) return;
-  const esc = (v) => String(v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const esc = (v) => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const r = lastSentRoute;
   const items = r.numbers.map((n, i) => `<tr><td>${i + 1}</td><td>№ ${esc(n)}</td></tr>`).join("");
-  const tasks = r.tasks.length ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
+  const tasks = r.tasks.length
+    ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("")
+    : '<li><em>Дополнительных заданий нет</em></li>';
+
   const w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return; }
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left}ol,ul{line-height:1.6}@media print{body{padding:10mm}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div><h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\\/script></body></html>`);
+  w.document.write(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)}</title>
+<style>
+body{font-family:Arial,sans-serif;padding:20px;max-width:800px;margin:0 auto;}
+h1{font-size:20px;margin:0 0 4px;}
+.meta{color:#555;margin-bottom:16px;}
+table{border-collapse:collapse;width:100%;margin-bottom:20px;}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;}
+th{background:#f4f4f4;}
+h2{font-size:16px;margin:16px 0 6px;}
+ul{margin:0;padding-left:20px;}
+</style></head><body>
+<h1>Маршрут: ${esc(r.label)}</h1>
+<div class="meta">Дата: ${esc(r.date)}</div>
+<h2>Отгрузки (${r.numbers.length})</h2>
+<table><thead><tr><th>№</th><th>Отгрузка</th></tr></thead><tbody>${items}</tbody></table>
+<h2>Дополнительные задания</h2>
+<ul>${tasks}</ul>
+<script>window.onload=()=>window.print();</script>
+</body></html>`);
   w.document.close();
 }
