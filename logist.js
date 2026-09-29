@@ -138,7 +138,7 @@ async function sendRoute() {
     resultEl.innerHTML = "<span class=\"error\">Список пуст.</span>";
     return;
   }
-  resultEl.textContent = "Шаг 1/2: Загружаю данные...";
+  resultEl.textContent = "Шаг 1/2: Загружаю данные (адреса, места)...";
   try {
     var controller = new AbortController();
     var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
@@ -194,56 +194,4 @@ function printRoute() {
   if (!w) { alert("Разрешите всплывающие окна."); return; }
   w.document.write("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Маршрут " + esc(r.label) + "</title><style>@page{margin:10mm;size:A4 landscape}body{font-family:Arial,sans-serif;padding:10px;font-size:11px}h1{font-size:16px;margin:0 0 4px}.meta{color:#555;margin-bottom:12px;font-size:12px}table{border-collapse:collapse;width:100%;margin-bottom:16px}th,td{border:1px solid #999;padding:5px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0;font-weight:700}.col-num{width:90px;white-space:nowrap}.col-places{width:60px;text-align:center}.col-address{width:auto}h2{font-size:13px;margin:14px 0 6px}ul{margin:0;padding-left:20px}@media print{body{padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}}</style></head><body><h1>Маршрут: " + esc(r.label) + "</h1><div class=\"meta\">Дата: " + esc(r.date) + "</div><h2>Отгрузки (" + r.items.length + ")</h2><table><thead><tr><th>Отгрузка</th><th>Мест</th><th>Адрес доставки</th></tr></thead><tbody>" + items + "</tbody></table><h2>Дополнительные задания</h2><ul>" + tasks + "</ul><script>window.onload=function(){window.print();}<\/script></body></html>");
   w.document.close();
-}
-
-async function showHistoryForDate() {
-  var date = document.getElementById("history-date").value;
-  var listEl = document.getElementById("history-list");
-  if (!date) { listEl.innerHTML = "<div class=\"hint\">Выберите дату</div>"; return; }
-  listEl.innerHTML = "<div class=\"hint\">Загружаю…</div>";
-  try {
-    var res = await fetch(CONFIG.PROXY_URL + "/route?date=" + date, {
-      headers: { "Authorization": getSavedAuth() }
-    });
-    if (res.status === 401) { logout(); return; }
-    var data = await res.json();
-    if (!data.found) { listEl.innerHTML = "<div class=\"hint\">На " + date + " маршрутов нет</div>"; return; }
-    var labels = {};
-    (data.items || []).forEach(function(it) {
-      if (!labels[it.label]) labels[it.label] = [];
-      labels[it.label].push(it.number);
-    });
-    var tasksByLabel = data.tasksByLabel || {};
-    var completedRoutes = data.completedRoutes || {};
-    var html = "<div style=\"margin-bottom:12px;\"><strong>Маршрут на " + date + "</strong></div>";
-    for (var label in labels) {
-      var numbers = labels[label];
-      var completed = completedRoutes[label];
-      var scannedSet = completed && Array.isArray(completed.scanned) ? new Set(completed.scanned) : null;
-      html += "<div class=\"history-item\"><div class=\"history-date\">" + label + " (" + numbers.length + " отгрузок)";
-      if (completed) {
-        html += " <span style=\"color:#2ecc71;font-size:0.85em;\">Закрыт " + new Date(completed.completedAt).toLocaleString("ru-RU") + "</span>";
-      } else {
-        html += " <span style=\"color:#95a5a6;font-size:0.85em;\">Не закрыт</span>";
-      }
-      html += "</div><div class=\"history-labels\">";
-      if (scannedSet) {
-        html += "<div style=\"display:flex;flex-wrap:wrap;gap:6px;\">";
-        numbers.forEach(function(num) {
-          var wasScanned = scannedSet.has(num);
-          html += "<div style=\"display:inline-flex;align-items:center;background:#f9f9f9;padding:4px 8px;border-radius:6px;\"><span>№" + num + "</span><span class=\"status-badge " + (wasScanned ? "status-shipped" : "status-other") + "\">" + (wasScanned ? "✓" : "—") + "</span></div>";
-        });
-        html += "</div>";
-      } else {
-        html += numbers.map(function(n) { return "№" + n; }).join(", ");
-      }
-      if (tasksByLabel[label] && tasksByLabel[label].length) {
-        html += "<div style=\"margin-top:8px;font-size:0.9em;color:#555;\"><strong>Задания:</strong> " + tasksByLabel[label].join("; ") + "</div>";
-      }
-      html += "</div></div>";
-    }
-    listEl.innerHTML = html;
-  } catch (e) {
-    listEl.innerHTML = "<div class=\"hint\">Не удалось загрузить</div>";
-  }
 }
