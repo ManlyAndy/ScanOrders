@@ -1,3 +1,7 @@
+// ===========================================================
+// Логика страницы логиста (Актуальная версия с токенами и защитой от обрывов)
+// ===========================================================
+
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
@@ -42,24 +46,43 @@ async function doLogin() {
   const basicAuth = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
 
   try {
+    // ПРАВИЛЬНЫЙ ЗАПРОС: POST на /login для получения токена
     const res = await fetch(`${CONFIG.PROXY_URL}/login`, {
       method: "POST",
-      headers: { "Authorization": basicAuth, "Content-Type": "application/json" },
+      headers: {
+        "Authorization": basicAuth,
+        "Content-Type": "application/json"
+      },
     });
 
-    if (res.status === 401) { errEl.textContent = "Неверный логин или пароль"; return; }
-    if (res.status === 403) { errEl.textContent = "У вас нет прав логиста"; return; }
-    if (!res.ok) { errEl.textContent = "Нет соединения с сервером"; return; }
+    if (res.status === 401) {
+      errEl.textContent = "Неверный логин или пароль";
+      return;
+    }
+    if (res.status === 403) {
+      errEl.textContent = "У вас нет прав логиста";
+      return;
+    }
+    if (!res.ok) {
+      errEl.textContent = `Ошибка сервера (код ${res.status})`;
+      return;
+    }
 
     const data = await res.json();
-    if (!data.ok || !data.token) { errEl.textContent = data.error || "Сервер не вернул токен"; return; }
+    if (!data.ok || !data.token) {
+      errEl.textContent = data.error || "Сервер не вернул токен";
+      return;
+    }
 
+    // Сохраняем токен, а не Basic-строку
     localStorage.setItem("sklad_token", data.token);
     localStorage.setItem("sklad_user", data.user || login);
+    
     document.getElementById("screen-login").style.display = "none";
     document.getElementById("screen-main").style.display = "block";
   } catch (e) {
-    errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js";
+    console.error("Ошибка входа:", e);
+    errEl.textContent = "Нет соединения с прокси. Проверьте интернет и PROXY_URL в config.js";
   }
 }
 
@@ -107,7 +130,6 @@ async function handleFile(e) {
       return;
     }
 
-    // МГНОВЕННО, без запросов в интернет
     statusEl.innerHTML = `Найдено номеров: ${parsedNumbers.length}. Нажмите "Отправить маршрут", чтобы загрузить детали.`;
     document.getElementById("preview-count").textContent = `Отгрузки в маршруте (${parsedNumbers.length}):`;
     document.getElementById("preview-chips").innerHTML = parsedNumbers.map((n) => `<span class="chip">${n}</span>`).join("");
@@ -118,6 +140,7 @@ async function handleFile(e) {
     statusEl.innerHTML = 'Не удалось прочитать PDF.';
   }
 }
+
 function openTaskModal() {
   document.getElementById("task-input").value = routeTasks.join("\n");
   document.getElementById("task-modal").style.display = "flex";
@@ -126,7 +149,6 @@ function openTaskModal() {
 function closeTaskModal() {
   document.getElementById("task-modal").style.display = "none";
 }
-
 function saveTasks() {
   routeTasks = document.getElementById("task-input").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   document.getElementById("task-preview").textContent = routeTasks.length ? `Доп. заданий: ${routeTasks.length}` : "Доп. заданий нет";
@@ -146,7 +168,7 @@ async function sendRoute() {
   resultEl.textContent = "Шаг 1/2: Запрашиваю данные о местах и адресах...";
 
   try {
-    // ОДИН запрос вместо десятков. Таймаут 30 секунд.
+    // ОДИН надежный запрос вместо десятков, с таймаутом 30 секунд
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -236,7 +258,6 @@ function printRoute() {
 </body></html>`);
   w.document.close();
 }
-
 async function showHistoryForDate() {
   const date = document.getElementById("history-date").value;
   const listEl = document.getElementById("history-list");
@@ -282,7 +303,7 @@ async function showHistoryForDate() {
             <span>№${num}</span>
             <span class="status-badge ${statusClass}">${wasScanned ? '✓' : '—'}</span>
           </div>`;
-           });
+        });
         html += '</div>';
         const scannedCount = numbers.filter(n => scannedSet.has(n)).length;
         html += `<div style="margin-top:8px;font-size:0.9em;color:#555;"><strong>Отсканировано:</strong> ${scannedCount} из ${numbers.length}</div>`;
