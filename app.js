@@ -48,15 +48,20 @@ function renderRouteStatus() {
   const el = document.getElementById("route-status");
   const clearBtn = document.getElementById("clear-route-btn");
   const listBtn = document.getElementById("show-list-btn");
+  const finishBtn = document.getElementById("finish-route-btn");
+  
   if (!currentRoute) {
     el.textContent = `Маршрут "${selectedRouteType}" не загружен — сканирование только по статусу`;
     clearBtn.style.display = "none";
     listBtn.style.display = "none";
+    if (finishBtn) finishBtn.style.display = "none";
     return;
   }
+  
   el.textContent = `Маршрут "${currentRoute.type}" на ${currentRoute.date}: отсканировано ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
   clearBtn.style.display = "inline-block";
   listBtn.style.display = "block";
+  if (finishBtn) finishBtn.style.display = "block";
   renderModalList();
 }
 function openRouteModal() {
@@ -135,6 +140,86 @@ function clearRoute() {
   localStorage.removeItem(routeStorageKey(currentRoute.type));
   currentRoute = null;
   renderRouteStatus();
+}
+async function finishRoute() {
+  if (!currentRoute) return;
+  
+  const total = currentRoute.numbers.length;
+  const scanned = currentRoute.scanned.size;
+  const notScanned = total - scanned;
+  
+  let message = `Закрыть маршрут "${currentRoute.type}" на ${currentRoute.date}?\n\n`;
+  message += `Отсканировано: ${scanned} из ${total}\n`;
+  
+  if (notScanned > 0) {
+    message += `Не отсканировано: ${notScanned}\n\n`;
+    message += `Все отсканированные отгрузки будут переведены в статус "Отгружено".\n`;
+    message += `Неотсканированные отгрузки останутся в статусе "Собрано".`;
+  } else {
+    message += `Все отгрузки будут переведены в статус "Отгружено".`;
+  }
+  
+  if (!confirm(message)) return;
+  
+  const btn = document.getElementById("finish-route-btn");
+  const originalText = btn.textContent;
+  btn.textContent = "Закрываю…";
+  btn.disabled = true;
+  
+  try {
+    // Сначала переводим все отсканированные в "Отгружено"
+    const idsToShip = [];
+    for (const num of currentRoute.scanned) {
+      try {
+        const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
+          headers: { Authorization: getSavedAuth() }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.found && data.ready) {
+            idsToShip.push(data.id);
+          }
+        }
+      } catch {}
+    }
+    
+    if (idsToShip.length) {
+      const finishRes = await fetch(`${CONFIG.PROXY_URL}/finish`, {
+        method: "POST",
+        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsToShip })
+      });
+      if (finishRes.status === 401) { logout(); return; }
+    }
+    
+    // Сохраняем информацию о закрытии маршрута
+    const completeRes = await fetch(`${CONFIG.PROXY_URL}/route/complete`, {
+      method: "POST",
+      headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date: currentRoute.date,
+        label: currentRoute.type,
+        scanned: Array.from(currentRoute.scanned)
+      })
+    });
+    
+    if (completeRes.status === 401) { logout(); return; }
+    const completeData = await completeRes.json();
+    
+    if (completeData.ok) {
+      alert(`Маршрут "${currentRoute.type}" закрыт.\n\nОтсканировано: ${scanned} из ${total}`);
+      localStorage.removeItem(routeStorageKey(currentRoute.type));
+      currentRoute = null;
+      renderRouteStatus();
+    } else {
+      alert("Не удалось сохранить информацию о закрытии маршрута");
+    }
+  } catch (e) {
+    alert("Ошибка при закрытии маршрута");
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 function screens() {
   return {
