@@ -134,17 +134,17 @@ async function handleFile(e) {
     statusEl.textContent = `Найдено номеров: ${numbers.length}. Загружаю данные о местах…`;
 
     const auth = getSavedAuth();
-    const results = await Promise.all(
+   const results = await Promise.all(
       numbers.map(async (num) => {
         try {
           const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
             headers: { Authorization: auth }
           });
-          if (!res.ok) return { number: num, places: null };
+          if (!res.ok) return { number: num, places: null, address: "" };
           const data = await res.json();
-          return { number: num, places: data.places || null };
+          return { number: num, places: data.places || null, address: data.deliveryAddress || "" };
         } catch {
-          return { number: num, places: null };
+          return { number: num, places: null, address: "" };
         }
       })
     );
