@@ -5,6 +5,7 @@ let html5QrCode = null;
 let currentResult = null;
 let currentRoute = null;
 let selectedRouteType = "МСК";
+let isScannerActive = false;
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -141,86 +142,6 @@ function clearRoute() {
   currentRoute = null;
   renderRouteStatus();
 }
-async function finishRoute() {
-  if (!currentRoute) return;
-  
-  const total = currentRoute.numbers.length;
-  const scanned = currentRoute.scanned.size;
-  const notScanned = total - scanned;
-  
-  let message = `Закрыть маршрут "${currentRoute.type}" на ${currentRoute.date}?\n\n`;
-  message += `Отсканировано: ${scanned} из ${total}\n`;
-  
-  if (notScanned > 0) {
-    message += `Не отсканировано: ${notScanned}\n\n`;
-    message += `Все отсканированные отгрузки будут переведены в статус "Отгружено".\n`;
-    message += `Неотсканированные отгрузки останутся в статусе "Собрано".`;
-  } else {
-    message += `Все отгрузки будут переведены в статус "Отгружено".`;
-  }
-  
-  if (!confirm(message)) return;
-  
-  const btn = document.getElementById("finish-route-btn");
-  const originalText = btn.textContent;
-  btn.textContent = "Закрываю…";
-  btn.disabled = true;
-  
-  try {
-    // Сначала переводим все отсканированные в "Отгружено"
-    const idsToShip = [];
-    for (const num of currentRoute.scanned) {
-      try {
-        const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
-          headers: { Authorization: getSavedAuth() }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.found && data.ready) {
-            idsToShip.push(data.id);
-          }
-        }
-      } catch {}
-    }
-    
-    if (idsToShip.length) {
-      const finishRes = await fetch(`${CONFIG.PROXY_URL}/finish`, {
-        method: "POST",
-        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: idsToShip })
-      });
-      if (finishRes.status === 401) { logout(); return; }
-    }
-    
-    // Сохраняем информацию о закрытии маршрута
-    const completeRes = await fetch(`${CONFIG.PROXY_URL}/route/complete`, {
-      method: "POST",
-      headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({
-        date: currentRoute.date,
-        label: currentRoute.type,
-        scanned: Array.from(currentRoute.scanned)
-      })
-    });
-    
-    if (completeRes.status === 401) { logout(); return; }
-    const completeData = await completeRes.json();
-    
-    if (completeData.ok) {
-      alert(`Маршрут "${currentRoute.type}" закрыт.\n\nОтсканировано: ${scanned} из ${total}`);
-      localStorage.removeItem(routeStorageKey(currentRoute.type));
-      currentRoute = null;
-      renderRouteStatus();
-    } else {
-      alert("Не удалось сохранить информацию о закрытии маршрута");
-    }
-  } catch (e) {
-    alert("Ошибка при закрытии маршрута");
-  } finally {
-    btn.textContent = originalText;
-    btn.disabled = false;
-  }
-}
 function screens() {
   return {
     login: document.getElementById("screen-login"),
@@ -277,7 +198,7 @@ async function doLogin() {
       return;
     }
 
-    const data = await res.json();
+  const data = await res.json();
     if (!data.ok || !data.token) {
       errEl.textContent = data.error || "Сервер не вернул токен";
       return;
@@ -306,9 +227,12 @@ function enterScanScreen() {
 
 // ---------- СКАНЕР ----------
 function startScanner() {
+  if (isScannerActive) return; // Сканер уже работает
+  
   const readerEl = document.getElementById("reader");
   readerEl.innerHTML = "";
   html5QrCode = new Html5Qrcode("reader");
+  
   Html5Qrcode.getCameras()
     .then((cameras) => {
       if (!cameras || !cameras.length) {
@@ -323,6 +247,9 @@ function startScanner() {
           (decodedText) => onScanSuccess(decodedText),
           () => {}
         )
+        .then(() => {
+          isScannerActive = true;
+        })
         .catch(() => {
           showCameraError(readerEl, "Не удалось запустить камеру. Разрешите доступ к камере в браузере.");
         });
@@ -339,7 +266,7 @@ function retryCamera() {
   setTimeout(startScanner, 300);
 }
 function stopScanner() {
-  if (html5QrCode) {
+  if (html5QrCode && isScannerActive) {
     try {
       const result = html5QrCode.stop();
       if (result && typeof result.catch === "function") {
@@ -347,10 +274,14 @@ function stopScanner() {
       }
     } catch (e) {}
     html5QrCode = null;
+    isScannerActive = false;
   }
 }
 function onScanSuccess(decodedText) {
-  stopScanner();
+  // Игнорируем сканирования, если показан экран результата
+  const resultScreen = document.getElementById("screen-result");
+  if (resultScreen.classList.contains("active")) return;
+  
   lookupCode(decodedText.trim());
 }
 function showManualInput() {
@@ -359,16 +290,13 @@ function showManualInput() {
 function submitManual() {
   const code = document.getElementById("manual-input").value.trim();
   if (!code) return;
-  stopScanner();
   lookupCode(code);
 }
 function backToScan() {
   document.getElementById("manual-input-wrap").style.display = "none";
   document.getElementById("manual-input").value = "";
   show("scan");
-  startScanner();
 }
-
 // ---------- ПОИСК И ОТОБРАЖЕНИЕ ----------
 async function lookupCode(code) {
   show("result");
@@ -390,6 +318,16 @@ async function lookupCode(code) {
       return;
     }
     currentResult = data;
+    
+    // Если отгрузка из маршрута - сразу отмечаем её как отсканированную
+    if (currentRoute && currentRoute.numbers.includes(data.name)) {
+      if (!currentRoute.scanned.has(data.name)) {
+        currentRoute.scanned.add(data.name);
+        saveRouteToStorage();
+        renderRouteStatus();
+      }
+    }
+    
     if (data.alreadyShipped) {
       renderAlreadyShipped(data);
     } else if (!data.ready) {
@@ -441,6 +379,18 @@ function renderNotInRoute(data) {
   </div>`;
 }
 function renderReady(data) {
+  const inRoute = currentRoute && currentRoute.numbers.includes(data.name);
+  const wasScanned = inRoute && currentRoute.scanned.has(data.name);
+  
+  let statusText = '';
+  if (inRoute) {
+    if (wasScanned) {
+      statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
+    } else {
+      statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
+    }
+  }
+  
   document.getElementById("result-body").innerHTML = `<div class="card ok">
     <div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div>
     <div class="num">№ ${escapeHtml(data.name)}</div>
@@ -448,44 +398,94 @@ function renderReady(data) {
     <div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div>
     <div class="meta">Количество мест: <b>${escapeHtml(String(data.places ?? "—"))}</b></div>
     <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
-  </div>
-  <button class="btn-success" onclick="confirmShip()">Отгрузить</button>`;
-}
-async function confirmShip() {
-  if (!currentResult) return;
-  const body = document.getElementById("result-body");
-  body.innerHTML = '<div class="spinner"></div><p class="hint">Меняю статус…</p>';
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/ship`, {
-      method: "POST",
-      headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({ id: currentResult.id }),
-    });
-    if (res.status === 401) { logout(); return; }
-    const data = await res.json();
-    if (data.ok) {
-      if (currentRoute) {
-        currentRoute.scanned.add(currentResult.name);
-        saveRouteToStorage();
-        renderRouteStatus();
-      }
-      body.innerHTML = `
-        <div class="card ok">
-          <div class="badge ok">ОТГРУЖЕНО ✓</div>
-          <div class="num">№ ${escapeHtml(currentResult.name)}</div>
-          <p class="meta">Статус успешно изменён.</p>
-        </div>`;
-    } else {
-      body.innerHTML = `<div class="card bad"><div class="badge bad">ОШИБКА</div><p>${escapeHtml(data.error || "Не удалось изменить статус")}</p></div>`;
-    }
-  } catch (e) {
-    body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Нет соединения с сервером.</p></div>';
-  }
+    ${statusText}
+  </div>`;
 }
 function escapeHtml(str) {
   const d = document.createElement("div");
   d.textContent = str;
   return d.innerHTML;
+}
+
+// ---------- ЗАКРЫТИЕ МАРШРУТА ----------
+async function finishRoute() {
+  if (!currentRoute) return;
+  
+  const total = currentRoute.numbers.length;
+  const scanned = currentRoute.scanned.size;
+  const notScanned = total - scanned;
+  
+  let message = `Закрыть маршрут "${currentRoute.type}" на ${currentRoute.date}?\n\n`;
+  message += `Отсканировано: ${scanned} из ${total}\n`;
+  
+  if (notScanned > 0) {
+    message += `Не отсканировано: ${notScanned}\n\n`;
+    message += `Все отсканированные будут переведены в статус "Отгружено".\n`;
+    message += `Неотсканированные останутся в статусе "Собрано".`;
+  } else {
+    message += `Все отгрузки будут переведены в статус "Отгружено".`;
+  }
+  
+  if (!confirm(message)) return;
+  
+  const btn = document.getElementById("finish-route-btn");
+  const originalText = btn.textContent;
+  btn.textContent = "Закрываю…";
+  btn.disabled = true;
+  
+  try {
+    const idsToShip = [];
+    for (const num of currentRoute.scanned) {
+      try {
+        const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
+          headers: { Authorization: getSavedAuth() }
+        });
+        if (res.status === 401) { logout(); return; }
+        if (res.ok) {
+          const data = await res.json();
+          if (data.found && data.ready) {
+            idsToShip.push(data.id);
+          }
+        }
+      } catch {}
+    }
+    
+    if (idsToShip.length) {
+      const finishRes = await fetch(`${CONFIG.PROXY_URL}/finish`, {
+        method: "POST",
+        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsToShip })
+      });
+      if (finishRes.status === 401) { logout(); return; }
+    }
+    
+    const completeRes = await fetch(`${CONFIG.PROXY_URL}/route/complete`, {
+      method: "POST",
+      headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date: currentRoute.date,
+        label: currentRoute.type,
+        scanned: Array.from(currentRoute.scanned)
+      })
+    });
+    
+    if (completeRes.status === 401) { logout(); return; }
+    const completeData = await completeRes.json();
+    
+    if (completeData.ok) {
+      alert(`Маршрут "${currentRoute.type}" закрыт.\n\nОтсканировано: ${scanned} из ${total}`);
+      localStorage.removeItem(routeStorageKey(currentRoute.type));
+      currentRoute = null;
+      renderRouteStatus();
+       } else {
+      alert("Не удалось сохранить информацию о закрытии маршрута");
+    }
+  } catch (e) {
+    alert("Ошибка при закрытии маршрута");
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 // ---------- СТАРТ ----------
