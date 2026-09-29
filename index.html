@@ -173,23 +173,32 @@
 
 <!-- ЭКРАН 2: СКАНЕР -->
 <div id="screen-scan" class="screen">
-  <div class="topbar">
-    <span class="who" id="who-label"></span>
-    <button class="link-btn" onclick="logout()">Выйти</button>
+  <div class="scanner-wrap">
+    <div id="reader"></div>
   </div>
-
-  <div class="card" id="route-card">
-    <div id="route-status" class="hint">Маршрут не загружен — сканирование только по статусу</div>
-    <p class="hint" style="margin-top:-4px; margin-bottom:10px;">Кнопки МСК/ТК переключают списки — каждый хранится отдельно, ничего не сбрасывается</p>
-    <div class="type-toggle">
-      <button class="type-btn active" id="type-btn-МСК" onclick="selectRouteType('МСК')">МСК</button>
-      <button class="type-btn" id="type-btn-ТК" onclick="selectRouteType('ТК')">ТК</button>
-      <button class="type-btn" id="type-btn-Найм" onclick="selectRouteType('Найм')">Найм</button>
-    </div>
-    <button class="btn-secondary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
-    <button class="btn-secondary" id="show-list-btn" style="display:none;" onclick="openRouteModal()">Показать список</button>
-    <button class="link-btn" id="clear-route-btn" style="display:none;" onclick="clearRoute()">Сбросить список (только на этом телефоне)</button>
+  
+  <div class="route-selector">
+    <button class="type-btn active" id="type-btn-МСК" onclick="selectRouteType('МСК')">МСК</button>
+    <button class="type-btn" id="type-btn-ТК" onclick="selectRouteType('ТК')">ТК</button>
+    <button class="type-btn" id="type-btn-Найм" onclick="selectRouteType('Найм')">Найм</button>
   </div>
+  
+  <div class="route-info">
+    <div id="route-status">Маршрут не загружен — сканирование только по статусу</div>
+    <div class="hint-small">Кнопки МСК/ТК переключают списки — каждый хранится отдельно, ничего не сбрасывается</div>
+    <button class="btn-primary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
+    <button class="btn-secondary" id="show-list-btn" onclick="openRouteModal()" style="display:none;">Показать список</button>
+    <button class="btn-danger" id="clear-route-btn" onclick="clearRoute()" style="display:none;">Сбросить список (только на этом телефоне)</button>
+  </div>
+  
+  <div id="manual-input-wrap" style="display:none;">
+    <input type="text" id="manual-input" placeholder="Введите номер отгрузки" />
+    <button class="btn-primary" onclick="submitManual()">Найти</button>
+  </div>
+  
+  <button class="btn-secondary" onclick="showManualInput()">Ввести номер вручную</button>
+  <button class="btn-secondary" onclick="logout()">Выйти</button>
+</div>
 
   <!-- Модальное окно со списком отгрузок маршрута -->
   <div id="route-modal" class="modal-overlay">
