@@ -1,5 +1,5 @@
 // ===========================================================
-// Логика страницы логиста (Актуальная версия с токенами и защитой от обрывов)
+// Логика страницы логиста (с токенами и защитой от обрывов)
 // ===========================================================
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -47,13 +47,18 @@ async function doLogin() {
 
   try {
     // ПРАВИЛЬНЫЙ ЗАПРОС: POST на /login для получения токена
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 сек таймаут
+
     const res = await fetch(`${CONFIG.PROXY_URL}/login`, {
       method: "POST",
       headers: {
         "Authorization": basicAuth,
         "Content-Type": "application/json"
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (res.status === 401) {
       errEl.textContent = "Неверный логин или пароль";
@@ -82,7 +87,11 @@ async function doLogin() {
     document.getElementById("screen-main").style.display = "block";
   } catch (e) {
     console.error("Ошибка входа:", e);
-    errEl.textContent = "Нет соединения с прокси. Проверьте интернет и PROXY_URL в config.js";
+    if (e.name === "AbortError") {
+      errEl.textContent = "Превышено время ожидания ответа. Проверьте интернет.";
+    } else {
+      errEl.textContent = "Нет соединения с сервером. Проверьте интернет и PROXY_URL.";
+    }
   }
 }
 
@@ -140,7 +149,6 @@ async function handleFile(e) {
     statusEl.innerHTML = 'Не удалось прочитать PDF.';
   }
 }
-
 function openTaskModal() {
   document.getElementById("task-input").value = routeTasks.join("\n");
   document.getElementById("task-modal").style.display = "flex";
@@ -149,6 +157,7 @@ function openTaskModal() {
 function closeTaskModal() {
   document.getElementById("task-modal").style.display = "none";
 }
+
 function saveTasks() {
   routeTasks = document.getElementById("task-input").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   document.getElementById("task-preview").textContent = routeTasks.length ? `Доп. заданий: ${routeTasks.length}` : "Доп. заданий нет";
@@ -206,7 +215,11 @@ async function sendRoute() {
     }
   } catch (e) {
     console.error(e);
-    resultEl.innerHTML = `<span class="error">❌ Сбой соединения. Проверьте интернет и попробуйте снова. (${e.message})</span>`;
+    if (e.name === "AbortError") {
+      resultEl.innerHTML = '<span class="error">⏱ Превышено время ожидания (30 сек). Проверьте интернет и попробуйте снова.</span>';
+    } else {
+      resultEl.innerHTML = '<span class="error">❌ Сбой соединения. Проверьте интернет и попробуйте снова.</span>';
+    }
   }
 }
 
@@ -258,6 +271,7 @@ function printRoute() {
 </body></html>`);
   w.document.close();
 }
+
 async function showHistoryForDate() {
   const date = document.getElementById("history-date").value;
   const listEl = document.getElementById("history-list");
@@ -276,8 +290,7 @@ async function showHistoryForDate() {
       if (!labels[it.label]) labels[it.label] = [];
       labels[it.label].push(it.number);
     });
-
-    const tasksByLabel = data.tasksByLabel || {};
+const tasksByLabel = data.tasksByLabel || {};
     const completedRoutes = data.completedRoutes || {};
 
     let html = `<div style="margin-bottom:12px;"><strong>Маршрут на ${date}</strong></div>`;
@@ -310,7 +323,6 @@ async function showHistoryForDate() {
       } else {
         html += numbers.map(n => `№${n}`).join(", ");
       }
-
       if (tasksByLabel[label] && tasksByLabel[label].length) {
         html += `<div style="margin-top:8px;font-size:0.9em;color:#555;"><strong>Задания:</strong> ${tasksByLabel[label].join("; ")}</div>`;
       }
