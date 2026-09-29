@@ -5,7 +5,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-let parsedNumbers = [];
+let parsedData = []; // массив {number, places}
 let routeTasks = [];
 let lastSentRoute = null;
 
@@ -100,6 +100,7 @@ async function handleFile(e) {
   document.getElementById("task-preview").textContent = "";
   routeTasks = [];
   lastSentRoute = null;
+  parsedData = [];
 
   try {
     const arrayBuffer = await file.arrayBuffer();
@@ -120,17 +121,38 @@ async function handleFile(e) {
       found.add(m[1]);
     }
 
-    parsedNumbers = Array.from(found);
+    const numbers = Array.from(found);
 
-    if (!parsedNumbers.length) {
+    if (!numbers.length) {
       statusEl.innerHTML = 'Не удалось найти номера отгрузок в этом файле. Проверьте, что это именно "Список отгрузок" из МойСклад.';
       return;
     }
 
-    statusEl.innerHTML = `Найдено номеров: ${parsedNumbers.length}`;
-    document.getElementById("preview-count").textContent = `Отгрузки в маршруте (${parsedNumbers.length}):`;
-    document.getElementById("preview-chips").innerHTML = parsedNumbers
-      .map((n) => `<span class="chip">${n}</span>`)
+    statusEl.textContent = `Найдено номеров: ${numbers.length}. Загружаю данные о местах…`;
+
+    // Параллельно запрашиваем places для каждого номера
+    const auth = getSavedAuth();
+    const results = await Promise.all(
+      numbers.map(async (num) => {
+        try {
+          const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
+            headers: { Authorization: auth }
+          });
+          if (!res.ok) return { number: num, places: null };
+          const data = await res.json();
+          return { number: num, places: data.places || null };
+        } catch {
+          return { number: num, places: null };
+        }
+      })
+    );
+
+    parsedData = results;
+
+    statusEl.innerHTML = `Найдено номеров: ${parsedData.length}`;
+    document.getElementById("preview-count").textContent = `Отгрузки в маршруте (${parsedData.length}):`;
+    document.getElementById("preview-chips").innerHTML = parsedData
+      .map((d) => `<span class="chip">${d.number}${d.places ? ` (${d.places} мест)` : ""}</span>`)
       .join("");
     document.getElementById("preview-card").style.display = "block";
     document.getElementById("task-btn").style.display = "inline-block";
@@ -166,17 +188,19 @@ async function sendRoute() {
   const resultEl = document.getElementById("send-result");
   resultEl.textContent = "Отправляю…";
 
+  const numbers = parsedData.map(d => d.number);
+
   try {
     const res = await fetch(`${CONFIG.PROXY_URL}/route`, {
       method: "POST",
       headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({ date, label, numbers: parsedNumbers, tasks: routeTasks }),
+      body: JSON.stringify({ date, label, numbers, tasks: routeTasks }),
     });
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
 
     if (data.ok) {
-      lastSentRoute = { date, label, numbers: [...parsedNumbers], tasks: [...routeTasks] };
+      lastSentRoute = { date, label, items: [...parsedData], tasks: [...routeTasks] };
       document.getElementById("print-btn").style.display = "inline-block";
       resultEl.innerHTML = `Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок: ${data.count}. Заданий: ${routeTasks.length}.`;
     } else {
@@ -191,7 +215,7 @@ function printRoute() {
   if (!lastSentRoute) return;
   const esc = (v) => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const r = lastSentRoute;
-  const items = r.numbers.map((n, i) => `<tr><td>${i + 1}</td><td>№ ${esc(n)}</td></tr>`).join("");
+  const items = r.items.map((d, i) => `<tr><td>${i + 1}</td><td>№ ${esc(d.number)}</td><td>${d.places || "—"}</td></tr>`).join("");
   const tasks = r.tasks.length
     ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("")
     : '<li><em>Дополнительных заданий нет</em></li>';
@@ -201,7 +225,7 @@ function printRoute() {
   w.document.write(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)}</title>
 <style>
-body{font-family:Arial,sans-serif;padding:20px;max-width:800px;margin:0 auto;}
+body{font-family:Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto;}
 h1{font-size:20px;margin:0 0 4px;}
 .meta{color:#555;margin-bottom:16px;}
 table{border-collapse:collapse;width:100%;margin-bottom:20px;}
@@ -212,11 +236,83 @@ ul{margin:0;padding-left:20px;}
 </style></head><body>
 <h1>Маршрут: ${esc(r.label)}</h1>
 <div class="meta">Дата: ${esc(r.date)}</div>
-<h2>Отгрузки (${r.numbers.length})</h2>
-<table><thead><tr><th>№</th><th>Отгрузка</th></tr></thead><tbody>${items}</tbody></table>
+<h2>Отгрузки (${r.items.length})</h2>
+<table><thead><tr><th>№</th><th>Отгрузка</th><th>Мест</th></tr></thead><tbody>${items}</tbody></table>
 <h2>Дополнительные задания</h2>
 <ul>${tasks}</ul>
 <script>window.onload=()=>window.print();</script>
 </body></html>`);
   w.document.close();
+}
+
+async function loadHistory() {
+  const listEl = document.getElementById("history-list");
+  listEl.innerHTML = '<div class="hint">Загружаю…</div>';
+
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/routes/list`, {
+      headers: { Authorization: getSavedAuth() }
+    });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+
+    if (!data.ok || !data.dates.length) {
+      listEl.innerHTML = '<div class="hint">История пуста</div>';
+      return;
+    }
+
+    listEl.innerHTML = data.dates.map(date => {
+      return `<div class="history-item" onclick="showRouteDetails('${date}')">
+        <div class="history-date">${date}</div>
+        <div class="history-labels">Нажмите для просмотра деталей</div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    listEl.innerHTML = '<div class="hint">Не удалось загрузить историю</div>';
+  }
+}
+
+async function showRouteDetails(date) {
+  const listEl = document.getElementById("history-list");
+  listEl.innerHTML = '<div class="hint">Загружаю детали…</div>';
+
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${date}`, {
+      headers: { Authorization: getSavedAuth() }
+    });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+
+    if (!data.found) {
+      listEl.innerHTML = '<div class="hint">Маршрут не найден</div>';
+      return;
+    }
+
+    const labels = {};
+    (data.items || []).forEach(it => {
+      if (!labels[it.label]) labels[it.label] = [];
+      labels[it.label].push(it.number);
+    });
+
+    const tasksByLabel = data.tasksByLabel || {};
+
+    let html = `<div style="margin-bottom:12px;"><strong>Маршрут на ${date}</strong></div>`;
+    
+    for (const [label, numbers] of Object.entries(labels)) {
+      html += `<div class="history-item" style="cursor:default;">
+        <div class="history-date">${label} (${numbers.length} отгрузок)</div>
+        <div class="history-labels">${numbers.map(n => `№${n}`).join(", ")}</div>`;
+      
+      if (tasksByLabel[label] && tasksByLabel[label].length) {
+        html += `<div style="margin-top:8px;font-size:0.9em;color:#555;"><strong>Задания:</strong> ${tasksByLabel[label].join("; ")}</div>`;
+      }
+      
+      html += `</div>`;
+    }
+
+    html += `<button class="btn-secondary" onclick="loadHistory()" style="margin-top:12px;">← Назад к списку дат</button>`;
+    listEl.innerHTML = html;
+  } catch (e) {
+    listEl.innerHTML = '<div class="hint">Не удалось загрузить детали</div>';
+  }
 }
