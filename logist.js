@@ -10,7 +10,8 @@ let routeTasks = [];
 let lastSentRoute = null;
 
 function getSavedAuth() {
-  return localStorage.getItem("sklad_auth");
+  const token = localStorage.getItem("sklad_token");
+  return token ? `Bearer ${token}` : null;
 }
 
 window.addEventListener("load", () => {
@@ -32,23 +33,43 @@ async function doLogin() {
     return;
   }
 
-  const authHeader = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
-  const today = new Date().toISOString().slice(0, 10);
+  const basicAuth = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
 
   try {
-    // Лёгкая проверка логина — читаем (возможно, пустой) маршрут за сегодня
-    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${today}`, {
-      headers: { Authorization: authHeader },
+    const res = await fetch(`${CONFIG.PROXY_URL}/login`, {
+      method: "POST",
+      headers: {
+        "Authorization": basicAuth,
+        "Content-Type": "application/json"
+      },
     });
     if (res.status === 401) {
       errEl.textContent = "Неверный логин или пароль";
       return;
     }
+    if (res.status === 403) {
+      errEl.textContent = "У вас нет прав логиста";
+      return;
+    }
+    if (!res.ok) {
+      errEl.textContent = "Нет соединения с сервером";
+      return;
+    }
+
+    const data = await res.json();
+    if (!data.ok || !data.token) {
+      errEl.textContent = data.error || "Сервер не вернул токен";
+      return;
+    }
+
+    localStorage.setItem("sklad_token", data.token);
+    localStorage.setItem("sklad_user", data.user || login);
+    document.getElementById("screen-login").style.display = "none";
+    document.getElementById("screen-main").style.display = "block";
   } catch (e) {
     errEl.textContent = "Нет соединения с прокси. Проверьте PROXY_URL в config.js";
-    return;
   }
-
+}
   localStorage.setItem("sklad_auth", authHeader);
   document.getElementById("screen-login").style.display = "none";
   document.getElementById("screen-main").style.display = "block";
