@@ -394,6 +394,8 @@ async function handleRouteComplete(request, auth, env) {
   const body = await request.json();
   const date = String(body.date || "").trim();
   const label = String(body.label || "").trim();
+  const scanned = Array.isArray(body.scanned) ? body.scanned.map(String).filter(Boolean) : [];
+
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !label) return json({ error: "Неверные данные маршрута" }, 400);
 
   const key = routeKey(date);
@@ -401,10 +403,13 @@ async function handleRouteComplete(request, auth, env) {
   if (!data || !Array.isArray(data.items)) return json({ error: "Маршрут не найден" }, 404);
 
   const completedRoutes = data.completedRoutes && typeof data.completedRoutes === "object" ? data.completedRoutes : {};
-  completedRoutes[label] = new Date().toISOString();
+  completedRoutes[label] = {
+    completedAt: new Date().toISOString(),
+    scanned: scanned
+  };
 
   await env.ROUTES.put(key, JSON.stringify({ ...data, completedRoutes }), { expirationTtl: ROUTE_TTL });
-  return json({ ok: true, date, label, completedAt: completedRoutes[label] });
+  return json({ ok: true, date, label, completedAt: completedRoutes[label].completedAt });
 }
 
 async function handlePhoto(url, auth, env) {
