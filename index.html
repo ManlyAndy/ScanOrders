@@ -144,7 +144,7 @@
 <div id="screen-login" class="screen">
   <h1>Вход — Контроль отгрузок</h1>
   <div class="card">
-    <p class="hint">Введите ваш логин и пароль от МойСклад.</p>
+    <p class="hint">Введите ваш обычный логин и пароль от МойСклад. Они сохранятся только на этом телефоне.</p>
     <input type="text" id="login-user" placeholder="Логин (email)" autocomplete="username" />
     <input type="password" id="login-pass" placeholder="Пароль" autocomplete="current-password" />
     <div id="login-error" class="error"></div>
@@ -155,4 +155,51 @@
 <div id="screen-scan" class="screen">
   <div style="text-align:center;margin-bottom:8px;">
     <span id="who-label" style="font-size:13px;color:#666;"></span>
-    <button class="btn-secondary" style="width:auto;padding
+    <button class="btn-secondary" style="width:auto;padding:6px 12px;font-size:13px;margin-left:8px;" onclick="logout()">Выйти</button>
+  </div>
+
+  <div class="scanner-wrap">
+    <div id="reader"></div>
+  </div>
+
+  <div class="route-selector">
+    <button class="type-btn active" id="type-btn-МСК" onclick="selectRouteType('МСК')">МСК</button>
+    <button class="type-btn" id="type-btn-ТК" onclick="selectRouteType('ТК')">ТК</button>
+    <button class="type-btn" id="type-btn-Найм" onclick="selectRouteType('Найм')">Найм</button>
+  </div>
+
+  <div class="route-info">
+    <div id="route-status">Маршрут не загружен — сканирование только по статусу</div>
+    <div class="hint-small">Кнопки МСК/ТК/Найм переключают списки — каждый хранится отдельно</div>
+    <button class="btn-primary" onclick="loadRoute()">Загрузить маршрут на сегодня</button>
+    <button class="btn-secondary" id="show-list-btn" onclick="openRouteModal()" style="display:none;">Показать список</button>
+    <button class="btn-danger" id="clear-route-btn" onclick="clearRoute()" style="display:none;">Сбросить список (только на этом телефоне)</button>
+  </div>
+
+  <div id="manual-input-wrap" style="display:none;">
+    <input type="text" id="manual-input" placeholder="Введите номер отгрузки" />
+    <button class="btn-primary" onclick="submitManual()">Найти</button>
+  </div>
+
+  <button class="btn-secondary" onclick="showManualInput()">Ввести номер вручную</button>
+</div>
+
+<div id="screen-result" class="screen">
+  <div id="result-body"></div>
+  <button class="btn-secondary" onclick="backToScan()">← Сканировать следующий</button>
+</div>
+
+<div id="route-modal" class="modal-overlay">
+  <div class="modal-content">
+    <h2 id="modal-title">Список маршрута</h2>
+    <div id="modal-list"></div>
+    <button class="btn-danger" onclick="if(confirm('Сбросить список на этом телефоне?')){clearRoute();closeRouteModal();}">Сбросить список (только на этом телефоне)</button>
+    <button class="btn-secondary" onclick="closeRouteModal()">Закрыть окно</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
