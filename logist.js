@@ -213,31 +213,50 @@ async function sendRoute() {
 }
 function printRoute() {
   if (!lastSentRoute) return;
-  const esc = (v) => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const esc = (v) => String(v || "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const r = lastSentRoute;
-  const items = r.items.map((d, i) => `<tr><td>${i + 1}</td><td>№ ${esc(d.number)}</td><td>${d.places ?? "—"}</td></tr>`).join("");
+  
+  const items = r.items.map((d) => `<tr>
+    <td class="col-num">№ ${esc(d.number)}</td>
+    <td class="col-places">${d.places ?? "—"}</td>
+    <td class="col-address">${esc(d.address) || "—"}</td>
+  </tr>`).join("");
+  
   const tasks = r.tasks.length
     ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("")
     : '<li><em>Дополнительных заданий нет</em></li>';
 
   const w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return; }
+  
   w.document.write(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)}</title>
 <style>
-body{font-family:Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto;}
-h1{font-size:20px;margin:0 0 4px;}
-.meta{color:#555;margin-bottom:16px;}
-table{border-collapse:collapse;width:100%;margin-bottom:20px;}
-th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;}
-th{background:#f4f4f4;}
-h2{font-size:16px;margin:16px 0 6px;}
-ul{margin:0;padding-left:20px;}
+  @page { margin: 10mm; size: A4 landscape; }
+  body { font-family: Arial, sans-serif; padding: 10px; font-size: 11px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .meta { color: #555; margin-bottom: 12px; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+  th, td { border: 1px solid #999; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; font-weight: 700; }
+  .col-num { width: 90px; white-space: nowrap; }
+  .col-places { width: 60px; text-align: center; }
+  .col-address { width: auto; }
+  h2 { font-size: 13px; margin: 14px 0 6px; }
+  ul { margin: 0; padding-left: 20px; }
+  @media print {
+    body { padding: 0; }
+    table { page-break-inside: auto; }
+    tr { page-break-inside: avoid; }
+  }
 </style></head><body>
 <h1>Маршрут: ${esc(r.label)}</h1>
 <div class="meta">Дата: ${esc(r.date)}</div>
 <h2>Отгрузки (${r.items.length})</h2>
-<table><thead><tr><th>№</th><th>Отгрузка</th><th>Мест</th></tr></thead><tbody>${items}</tbody></table>
+<table>
+  <thead><tr><th>Отгрузка</th><th>Мест</th><th>Адрес доставки</th></tr></thead>
+  <tbody>${items}</tbody>
+</table>
 <h2>Дополнительные задания</h2>
 <ul>${tasks}</ul>
 <script>window.onload=()=>window.print();<\/script>
