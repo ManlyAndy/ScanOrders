@@ -27,11 +27,7 @@ function corsHeaders() {
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store, no-cache, must-revalidate",
-      ...corsHeaders()
-    }
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...corsHeaders() }
   });
 }
 
@@ -58,7 +54,7 @@ async function checkAuth(auth) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${API_BASE}/context/employee`, {
-      headers: { Authorization: auth, "Accept-Encoding": "gzip" },
+      headers: { Authorization: auth },
       signal: controller.signal
     });
     clearTimeout(timeoutId);
@@ -157,9 +153,6 @@ export default {
         if (!isAllowedRouteLogin(username)) return json({ error: "Нет прав" }, 403);
         return await handleRouteComplete(request, auth, env);
       }
-      if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
-      if (url.pathname === "/photo/upload" && request.method === "POST") return await handlePhotoUpload(request, auth, env);
-      if (url.pathname === "/bitrix/test" && request.method === "GET") return await handleBitrixTest(auth, env);
     } catch { return json({ error: "Внутренняя ошибка" }, 500); }
     return json({ error: "Действие не разрешено" }, 403);
   }
@@ -168,13 +161,15 @@ export default {
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
   if (!code) return json({ error: "Не передан номер" }, 400);
+  
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state`, {
     headers: { Authorization: auth },
-    cf: { cacheTtl: 0, cacheEverything: false }
+    cf: { cacheTtl: 0 }
   });
   if (res.status === 401) return unauthorized();
   if (!res.ok) return json({ error: "Ошибка МойСклад" }, 502);
+  
   const data = await res.json();
   const row = data.rows && data.rows[0];
   if (!row) return json({ found: false });
@@ -184,16 +179,18 @@ async function handleFind(url, auth) {
   });
   if (!detailRes.ok) return json({ error: "Не удалось получить данные" }, 502);
   const detail = await detailRes.json();
+  
   const stateName = detail.state ? detail.state.name : null;
   const places = extractPlaces(detail);
+  const deliveryAddress = extractDeliveryAddress(detail);
 
   return json({
     found: true, id: detail.id, name: detail.name,
     agentName: detail.agent ? detail.agent.name : "—",
     sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
-    positionsCount: detail.positions && detail.positions.meta ? detail.positions.meta.size : "—",
+    positionsCount: detail.positions?.meta?.size || "—",
     places,
-    deliveryAddress: extractDeliveryAddress(detail),
+    deliveryAddress,
     stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
@@ -202,25 +199,49 @@ async function handleFind(url, auth) {
 
 function extractPlaces(row) {
   const attrs = Array.isArray(row.attributes) ? row.attributes : [];
-  const exact = attrs.find(a => String(a.name || "").trim().toLowerCase() === PLACES_FIELD_NAME.toLowerCase());
-  const flexible = attrs.find(a => /количеств.*мест/i.test(String(a.name || "")));
-  const attr = exact || flexible;
+  const attr = attrs.find(a => String(a.name || "").trim().toLowerCase() === PLACES_FIELD_NAME.toLowerCase()) ||
+               attrs.find(a => /количеств.*мест/i.test(String(a.name || "")));
   if (!attr) return null;
   const value = attr.value;
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "object" && value !== null) {
-    if (value.value !== undefined) return value.value;
-    if (value.name !== undefined) return value.name;
+    return value.value !== undefined ? value.value : value.name;
   }
   return value;
 }
 
 function extractDeliveryAddress(row) {
-  const addr = row.deliveryAddress;
-  if (!addr) return "";
-  if (typeof addr === "string") return addr;
-  if (typeof addr === "object") return addr.address || addr.name || "";
-  return String(addr);
+  // Вариант 1: поле deliveryAddress
+  if (row.deliveryAddress) {
+    if (typeof row.deliveryAddress === "string") return row.deliveryAddress;
+    if (typeof row.deliveryAddress === "object") {
+      if (row.deliveryAddress.address) return row.deliveryAddress.address;
+      if (row.deliveryAddress.name) return row.deliveryAddress.name;
+      if (row.deliveryAddress.fullAddress) return row.deliveryAddress.fullAddress;
+    }
+  }
+  
+  // Вариант 2: поле address
+  if (row.address) {
+    if (typeof row.address === "string") return row.address;
+    if (typeof row.address === "object") {
+      if (row.address.address) return row.address.address;
+      if (row.address.name) return row.address.name;
+    }
+  }
+  
+  // Вариант 3: в атрибутах
+  const attrs = Array.isArray(row.attributes) ? row.attributes : [];
+  const addrAttr = attrs.find(a => {
+    const name = String(a.name || "").toLowerCase();
+    return name.includes("адрес") || name.includes("доставк");
+  });
+  if (addrAttr && addrAttr.value) {
+    if (typeof addrAttr.value === "string") return addrAttr.value;
+    if (typeof addrAttr.value === "object" && addrAttr.value.value) return addrAttr.value.value;
+  }
+  
+  return "";
 }
 
 async function handleRouteDetails(request, auth) {
@@ -268,12 +289,12 @@ async function handleShip(request, auth) {
   if (!id) return json({ error: "Не передан id" }, 400);
   const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
     headers: { Authorization: auth },
-    cf: { cacheTtl: 0, cacheEverything: false }
+    cf: { cacheTtl: 0 }
   });
   if (demandRes.status === 401) return unauthorized();
   if (!demandRes.ok) return json({ error: "Не удалось проверить" }, 502);
   const demand = await demandRes.json();
-  const currentState = demand.state ? demand.state.name : null;
+  const currentState = demand.state?.name || null;
   if (currentState !== STATUS_READY_NAME) {
     return json({ ok: false, error: `Статус: "${currentState || "—"}"` }, 409);
   }
@@ -302,12 +323,12 @@ async function handleFinish(request, auth) {
     try {
       const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
         headers: { Authorization: auth },
-        cf: { cacheTtl: 0, cacheEverything: false }
+        cf: { cacheTtl: 0 }
       });
       if (demandRes.status === 401) return unauthorized();
       if (!demandRes.ok) { results.push({ id, ok: false, error: "Ошибка" }); continue; }
       const demand = await demandRes.json();
-      const currentState = demand.state ? demand.state.name : null;
+      const currentState = demand.state?.name || null;
       if (currentState === STATUS_SHIPPED_NAME) { results.push({ id, ok: true, alreadyShipped: true }); continue; }
       if (currentState !== STATUS_READY_NAME) { results.push({ id, ok: false, error: `Статус: ${currentState}` }); continue; }
       const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, { headers: { Authorization: auth } });
@@ -337,7 +358,6 @@ async function handleRouteUpload(request, auth, env) {
   const date = (body.date || "").trim();
   const numbers = Array.isArray(body.numbers) ? [...new Set(body.numbers.map(x => String(x).trim()).filter(Boolean))].slice(0, 1000) : [];
   const label = (body.label || "").trim();
-  const tasks = Array.isArray(body.tasks) ? body.tasks.map(t => String(t).trim()).filter(Boolean) : [];
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Неверная дата" }, 400);
   if (!numbers.length) return json({ error: "Список пуст" }, 400);
   if (!label || label.length > 100) return json({ error: "Неверное название" }, 400);
@@ -346,10 +366,9 @@ async function handleRouteUpload(request, auth, env) {
   const items = Array.isArray(existing?.items) ? existing.items : [];
   const filtered = items.filter(item => item.label !== label);
   filtered.push(...numbers.map(number => ({ number, label })));
-  const tasksByLabel = (existing?.tasksByLabel && typeof existing.tasksByLabel === "object") ? { ...existing.tasksByLabel } : {};
-  tasksByLabel[label] = tasks;
   await env.ROUTES.put(key, JSON.stringify({
-    date, items: filtered, tasksByLabel,
+    date, items: filtered,
+    tasksByLabel: existing?.tasksByLabel || {},
     completedRoutes: existing?.completedRoutes || {}
   }), { expirationTtl: ROUTE_TTL });
   return json({ ok: true, count: filtered.length });
@@ -379,62 +398,4 @@ async function handleRouteComplete(request, auth, env) {
   completedRoutes[label] = { completedAt: new Date().toISOString(), scanned };
   await env.ROUTES.put(key, JSON.stringify({ ...data, completedRoutes }), { expirationTtl: ROUTE_TTL });
   return json({ ok: true, date, label, completedAt: completedRoutes[label].completedAt });
-}
-
-async function handlePhoto(url, auth, env) {
-  const number = (url.searchParams.get("number") || "").trim();
-  if (!number) return json({ error: "Не передан номер" }, 400);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  return json({ ok: false, error: "Просмотр фото не поддерживается" }, 501);
-}
-
-async function bitrixCall(webhook, method, payload) {
-  const r = await fetch(`${webhook}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || data.error) throw new Error(data.error_description || data.error || `Bitrix ${r.status}`);
-  return data;
-}
-
-async function handlePhotoUpload(request, auth, env) {
-  if (!env.BITRIX_WEBHOOK_URL) return json({ error: "Bitrix не настроен" }, 500);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  const body = await request.json();
-  const number = String(body.number || "").trim();
-  const photos = Array.isArray(body.photos) ? body.photos : [];
-  const by = String(body.by || "").trim();
-  if (!number) return json({ error: "Не передан номер" }, 400);
-  if (!photos.length) return json({ error: "Нет фото" }, 400);
-  if (photos.length > 10) return json({ error: "Максимум 10 фото" }, 400);
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-  const caption = `Отгрузка №${number}${by ? ` (загрузил: ${by})` : ""}`;
-  let uploaded = 0;
-  const results = [];
-  for (let i = 0; i < photos.length; i++) {
-    const p = photos[i];
-    if (!p?.content) continue;
-    const name = String(p.name || `order-${number}-${i + 1}.jpg`).replace(/[^a-zA-Z0-9А-Яа-я._-]/g, "_");
-    const data = await bitrixCall(webhook, "im.v2.File.upload", {
-      dialogId: BITRIX_DIALOG_ID,
-      fields: { name, content: p.content, message: caption }
-    });
-    uploaded++;
-    results.push({ name, result: data.result });
-  }
-  return json({ ok: true, number, uploaded, results });
-}
-
-async function handleBitrixTest(auth, env) {
-  if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "BITRIX_WEBHOOK_URL не задан" }, 500);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-  try {
-    const data = await bitrixCall(webhook, "im.dialog.get", { DIALOG_ID: BITRIX_DIALOG_ID });
-    return json({ ok: true, chatId: BITRIX_CHAT_ID, dialogId: BITRIX_DIALOG_ID, chat: data.result || null });
-  } catch (e) {
-    return json({ ok: false, chatId: BITRIX_CHAT_ID, dialogId: BITRIX_DIALOG_ID, error: String(e) }, 502);
-  }
 }
