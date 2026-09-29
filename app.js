@@ -238,7 +238,7 @@ function startScanner() {
       html5QrCode
         .start(
           backCam.id,
-          { fps: 10, qrbox: { width: 250, height: 150 } },
+          { fps: 10, qrbox: { width: 220, height: 120 } },
           (decodedText) => onScanSuccess(decodedText),
           () => {}
         )
