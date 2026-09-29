@@ -3,7 +3,7 @@
 // ===========================================================
 let html5QrCode = null;
 let currentResult = null;
-let currentRoute = null; // { date, type, numbers: [...], scanned: Set, tasks: [...] }
+let currentRoute = null;
 let selectedRouteType = "МСК";
 
 function todayStr() {
@@ -91,8 +91,6 @@ function renderModalList() {
     listEl.innerHTML += `<div style="margin-top:14px;font-weight:700;">Доп. задания</div>` +
       currentRoute.tasks.map(t => `<div class="modal-row"><span>ℹ️ ${escapeHtml(t)}</span></div>`).join("");
   }
-  const titleEl = document.getElementById("modal-title");
-  if (titleEl) titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
 }
 async function loadRoute() {
   const el = document.getElementById("route-status");
@@ -131,8 +129,7 @@ function clearRoute() {
   if (!currentRoute) return;
   const ok = confirm(
     `Сбросить список "${currentRoute.type}" на этом телефоне?\n\n` +
-    `Это НЕ меняет никакие статусы в МойСклад — только очищает список на устройстве.\n` +
-    `Чтобы переключиться на другой маршрут, можно просто нажать МСК/ТК — списки хранятся отдельно.`
+    `Это НЕ меняет статусы в МойСклад — только очищает список на устройстве.`
   );
   if (!ok) return;
   localStorage.removeItem(routeStorageKey(currentRoute.type));
@@ -216,7 +213,6 @@ function logout() {
 }
 function enterScanScreen() {
   document.getElementById("who-label").textContent = getSavedUser();
-  document.getElementById("who-label-2").textContent = getSavedUser();
   currentRoute = loadRouteFromStorage();
   renderRouteStatus();
   show("scan");
@@ -302,10 +298,7 @@ async function lookupCode(code) {
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    if (res.status === 401) {
-      logout();
-      return;
-    }
+    if (res.status === 401) { logout(); return; }
     const data = await res.json();
     if (!data.found) {
       renderNotFound(code);
@@ -324,7 +317,7 @@ async function lookupCode(code) {
   } catch (e) {
     clearTimeout(timeoutId);
     if (e.name === "AbortError") {
-      body.innerHTML = '<div class="card bad"><div class="badge bad">ДОЛГИЙ ОТВЕТ</div><p>Сервер МойСклад отвечает дольше 15 секунд. Возможно, сработало ограничение по количеству запросов в вашем тарифе МойСклад — подождите немного и попробуйте снова.</p></div>';
+      body.innerHTML = '<div class="card bad"><div class="badge bad">ДОЛГИЙ ОТВЕТ</div><p>Сервер МойСклад отвечает дольше 15 секунд. Подождите немного и попробуйте снова.</p></div>';
     } else {
       body.innerHTML = '<div class="card bad"><div class="badge bad">ОШИБКА</div><p>Не удалось связаться с сервером. Проверьте интернет.</p></div>';
     }
@@ -334,7 +327,7 @@ function renderNotFound(code) {
   document.getElementById("result-body").innerHTML = `<div class="card bad">
     <div class="badge bad">НЕ НАЙДЕНО</div>
     <div class="num">№ ${escapeHtml(code)}</div>
-    <p class="meta">Отгрузка с таким номером не найдена. Это может быть чужой или неверный штрихкод.</p>
+    <p class="meta">Отгрузка с таким номером не найдена.</p>
   </div>`;
 }
 function renderWrongStatus(data) {
@@ -359,7 +352,7 @@ function renderNotInRoute(data) {
     <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
     <div class="num">№ ${escapeHtml(data.name)}</div>
     <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-    <p class="meta">Заказ собран, но его нет в загруженном маршруте "${escapeHtml(currentRoute.type)}". Проверьте тип маршрута или сам заказ.</p>
+    <p class="meta">Заказ собран, но его нет в маршруте "${escapeHtml(currentRoute.type)}".</p>
   </div>`;
 }
 function renderReady(data) {
@@ -368,6 +361,7 @@ function renderReady(data) {
     <div class="num">№ ${escapeHtml(data.name)}</div>
     <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
     <div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div>
+    <div class="meta">Количество мест: <b>${escapeHtml(String(data.places ?? "—"))}</b></div>
     <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
   </div>
   <button class="btn-success" onclick="confirmShip()">Отгрузить</button>`;
