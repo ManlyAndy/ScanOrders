@@ -18,6 +18,43 @@
   h1 { font-size: 22px; margin: 8px 0 16px; text-align: center; }
   h2 { font-size: 18px; margin: 16px 0 10px; }
   h3 { font-size: 16px; margin: 12px 0 8px; }
+
+  /* ====== Зона загрузки маршрута (выделенная) ====== */
+  .upload-zone {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+    color: white;
+  }
+  .upload-zone label {
+    display: block;
+    font-weight: 600;
+    margin: 10px 0 6px;
+    color: rgba(255,255,255,0.95);
+  }
+  .upload-zone input[type="date"],
+  .upload-zone input[type="file"],
+  .upload-zone select {
+    background: rgba(255,255,255,0.95);
+    border: none;
+    color: #333;
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    border-radius: 8px;
+    font-family: inherit;
+  }
+  .upload-zone .hint {
+    color: rgba(255,255,255,0.85);
+  }
+  .upload-zone .chip {
+    background: rgba(255,255,255,0.25);
+    color: white;
+  }
+
+  /* ====== Общие блоки ====== */
   .card {
     background: #fff;
     border-radius: 12px;
@@ -25,7 +62,7 @@
     margin-bottom: 12px;
     box-shadow: 0 2px 6px rgba(0,0,0,0.06);
   }
-  input[type="text"], input[type="password"], input[type="date"], select, textarea {
+  input[type="text"], input[type="password"], textarea {
     width: 100%;
     padding: 12px;
     font-size: 16px;
@@ -59,6 +96,8 @@
     font-size: 13px;
     margin: 3px;
   }
+
+  /* ====== Модалка доп. задания ====== */
   .modal-overlay {
     display: none;
     position: fixed;
@@ -77,25 +116,51 @@
     max-width: 500px;
     width: 100%;
   }
+
+  /* ====== История маршрутов ====== */
   .history-section {
     margin-top: 30px;
     padding-top: 20px;
     border-top: 2px solid #eee;
+  }
+  .calendar-wrap {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+  .calendar-wrap input[type="date"] {
+    font-size: 18px;
+    padding: 14px;
+    text-align: center;
+    width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 10px;
   }
   .history-item {
     background: #fff;
     padding: 12px;
     border-radius: 8px;
     margin-bottom: 8px;
-    cursor: pointer;
     box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    transition: background 0.2s;
   }
-  .history-item:hover { background: #f0f7ff; }
-  .history-item.static { cursor: default; }
-  .history-item.static:hover { background: #fff; }
   .history-date { font-weight: 700; margin-bottom: 6px; }
   .history-labels { font-size: 0.9em; color: #666; word-break: break-word; }
+
+  /* ====== Бейджи статусов ====== */
+  .status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  .status-shipped { background: #2ecc71; color: white; }
+  .status-ready { background: #f39c12; color: white; }
+  .status-other { background: #95a5a6; color: white; }
 </style>
 </head>
 <body>
@@ -113,7 +178,8 @@
 <div id="screen-main" class="screen" style="display:none;">
   <h1>Загрузка маршрута</h1>
 
-  <div class="card">
+  <!-- ====== Выделенная зона загрузки ====== -->
+  <div class="upload-zone">
     <label>Дата отгрузки</label>
     <input type="date" id="route-date" />
 
@@ -134,24 +200,30 @@
       <div id="task-preview" class="hint" style="margin-top:10px;"></div>
     </div>
 
-    <div style="margin-top:14px;">
-      <button class="btn-secondary" id="task-btn" onclick="openTaskModal()" style="display:none;">Доп. задание</button>
-      <button class="btn-primary" id="send-btn" onclick="sendRoute()" style="display:none;">Отправить маршрут</button>
+   <div style="margin-top:14px;">
+      <button class="btn-secondary" id="task-btn" onclick="openTaskModal()" style="display:none;background:rgba(255,255,255,0.2);color:white;">Доп. задание</button>
+      <button class="btn-primary" id="send-btn" onclick="sendRoute()" style="display:none;background:white;color:#667eea;">Отправить маршрут</button>
       <button class="btn-success" id="print-btn" onclick="printRoute()" style="display:none;">Распечатать маршрут</button>
     </div>
 
     <div id="send-result" class="hint" style="margin-top:10px;"></div>
-
-    <button class="btn-secondary" onclick="logout()" style="margin-top:20px;">Выйти</button>
   </div>
 
+  <button class="btn-secondary" onclick="logout()">Выйти</button>
+
+  <!-- ====== История маршрутов (календарь) ====== -->
   <div class="history-section">
     <h3>История маршрутов</h3>
-    <button class="btn-secondary" onclick="loadHistory()">Загрузить историю</button>
+    <div class="calendar-wrap">
+      <label style="font-weight:600;margin-bottom:8px;display:block;">Выберите дату для просмотра</label>
+      <input type="date" id="history-date" />
+      <button class="btn-primary" onclick="showHistoryForDate()" style="width:100%;margin-top:8px;">Показать маршрут</button>
+    </div>
     <div id="history-list" style="margin-top:12px;"></div>
   </div>
 </div>
 
+<!-- ====== Модалка доп. задания ====== -->
 <div id="task-modal" class="modal-overlay">
   <div class="modal-content">
     <h2>Доп. задание</h2>
