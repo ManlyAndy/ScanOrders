@@ -179,6 +179,7 @@ export default {
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
   if (!code) return json({ error: "Не передан номер" }, 400);
+  
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state`, {
     headers: { Authorization: auth },
@@ -186,6 +187,7 @@ async function handleFind(url, auth) {
   });
   if (res.status === 401) return unauthorized();
   if (!res.ok) return json({ error: "Ошибка МойСклад" }, 502);
+  
   const data = await res.json();
   const row = data.rows && data.rows[0];
   if (!row) return json({ found: false });
@@ -195,8 +197,10 @@ async function handleFind(url, auth) {
   });
   if (!detailRes.ok) return json({ error: "Не удалось получить данные отгрузки" }, 502);
   const detail = await detailRes.json();
+  
   const stateName = detail.state ? detail.state.name : null;
   const places = extractPlaces(detail);
+  const deliveryAddress = extractDeliveryAddress(detail);
 
   return json({
     found: true,
@@ -206,10 +210,19 @@ async function handleFind(url, auth) {
     sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
     positionsCount: detail.positions && detail.positions.meta ? detail.positions.meta.size : "—",
     places,
+    deliveryAddress,
     stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
   });
+}
+
+function extractDeliveryAddress(row) {
+  const addr = row.deliveryAddress;
+  if (!addr) return "";
+  if (typeof addr === "string") return addr;
+  if (typeof addr === "object") return addr.address || addr.name || "";
+  return String(addr);
 }
 
 function extractPlaces(row) {
