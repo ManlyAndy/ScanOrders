@@ -7,12 +7,14 @@ const BITRIX_DIALOG_ID = `chat${BITRIX_CHAT_ID}`;
 const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 const SESSION_TTL = 28800;
 const ROUTE_TTL = 15552000; // 180 дней
+
 const ALLOWED_MS_LOGINS = new Set([
   "kovalkov@boss191",
   "harunin@boss191",
   "grishaev@boss191",
   "absaluttinova@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
+
 const ALLOWED_ROUTE_LOGINS = new Set([
   "kovalkov@boss191",
   "harunin@boss191",
@@ -75,8 +77,6 @@ async function verifyAuth(auth) {
   return status >= 200 && status < 300;
 }
 
-// Пересобирает заголовок Basic: убирает случайные пробелы вокруг логина/пароля
-// (мобильные клавиатуры часто добавляют пробел в конце).
 function buildAuthVariants(auth) {
   try {
     const raw = atob(auth.slice(6));
@@ -120,6 +120,7 @@ async function handleLogin(request, env) {
   if (!auth.startsWith("Basic ")) return unauthorized();
   const username = getBasicUsername(auth);
   if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
+
   let goodAuth = null;
   let lastStatus = 401;
   for (const candidate of buildAuthVariants(auth)) {
@@ -127,10 +128,12 @@ async function handleLogin(request, env) {
     if (lastStatus >= 200 && lastStatus < 300) { goodAuth = candidate; break; }
     if (lastStatus !== 401) break;
   }
+
   if (!goodAuth) {
     if (lastStatus === 401) return json({ error: "Неверный логин или пароль" }, 401);
     return json({ error: `МойСклад не ответил (код ${lastStatus}). Попробуйте ещё раз` }, 502);
   }
+
   const token = await createSession(goodAuth, env);
   if (!token) return json({ error: "Сервер авторизации не настроен" }, 500);
   return json({ ok: true, token, expiresIn: SESSION_TTL, user: username });
@@ -140,11 +143,15 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders() });
+
     if (url.pathname === "/login" && request.method === "POST") return handleLogin(request, env);
+
     const auth = await getSessionAuth(request, env);
     if (!auth) return unauthorized();
+
     const username = getBasicUsername(auth);
     if (!isAllowedLogin(username)) return json({ error: "Доступ к приложению запрещён" }, 403);
+
     try {
       if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
       if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
@@ -154,6 +161,7 @@ export default {
         return await handleRouteUpload(request, auth, env);
       }
       if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
+      if (url.pathname === "/routes/list" && request.method === "GET") return await handleRoutesList(auth, env);
       if (url.pathname === "/route/complete" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
         return await handleRouteComplete(request, auth, env);
@@ -181,6 +189,7 @@ async function handleFind(url, auth) {
   const data = await res.json();
   const row = data.rows && data.rows[0];
   if (!row) return json({ found: false });
+
   const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state`, {
     headers: { Authorization: auth }
   });
@@ -188,6 +197,7 @@ async function handleFind(url, auth) {
   const detail = await detailRes.json();
   const stateName = detail.state ? detail.state.name : null;
   const places = extractPlaces(detail);
+
   return json({
     found: true,
     id: detail.id,
@@ -221,6 +231,7 @@ async function handleShip(request, auth) {
   const body = await request.json();
   const id = body.id;
   if (!id) return json({ error: "Не передан id отгрузки" }, 400);
+
   const demandRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state`, {
     headers: { Authorization: auth },
     cf: { cacheTtl: 0, cacheEverything: false }
@@ -229,15 +240,18 @@ async function handleShip(request, auth) {
   if (!demandRes.ok) return json({ error: "Не удалось проверить отгрузку" }, 502);
   const demand = await demandRes.json();
   const currentState = demand.state ? demand.state.name : null;
+
   if (currentState !== STATUS_READY_NAME) {
     return json({ ok: false, error: `Отгрузка сейчас в статусе "${currentState || "—"}"` }, 409);
   }
+
   const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, { headers: { Authorization: auth } });
   if (!metaRes.ok) return json({ error: "Не удалось получить настройки МойСклад" }, 502);
   const meta = await metaRes.json();
   const states = meta.states || meta.states?.rows || [];
   const shippedState = states.find(s => s.name === STATUS_SHIPPED_NAME);
   if (!shippedState) return json({ error: "Статус отгрузки не найден" }, 500);
+
   const putRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { Authorization: auth, "Content-Type": "application/json" },
@@ -252,6 +266,7 @@ async function handleFinish(request, auth) {
   const body = await request.json();
   const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(Boolean))].slice(0, 100) : [];
   if (!ids.length) return json({ error: "Список отгрузок пуст" }, 400);
+
   const results = [];
   for (const id of ids) {
     try {
@@ -266,6 +281,7 @@ async function handleFinish(request, auth) {
       }
       const demand = await demandRes.json();
       const currentState = demand.state ? demand.state.name : null;
+
       if (currentState === STATUS_SHIPPED_NAME) {
         results.push({ id, ok: true, alreadyShipped: true });
         continue;
@@ -274,6 +290,7 @@ async function handleFinish(request, auth) {
         results.push({ id, ok: false, error: `Отгрузка сейчас в статусе "${currentState || "—"}"` });
         continue;
       }
+
       const metaRes = await fetch(`${API_BASE}/entity/demand/metadata`, { headers: { Authorization: auth } });
       if (!metaRes.ok) {
         results.push({ id, ok: false, error: "Не удалось получить настройки МойСклад" });
@@ -286,6 +303,7 @@ async function handleFinish(request, auth) {
         results.push({ id, ok: false, error: "Статус отгрузки не найден" });
         continue;
       }
+
       const putRes = await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { Authorization: auth, "Content-Type": "application/json" },
@@ -301,6 +319,7 @@ async function handleFinish(request, auth) {
       results.push({ id, ok: false, error: "Ошибка соединения с МойСклад" });
     }
   }
+
   const success = results.filter(x => x.ok || x.alreadyShipped).length;
   const failed = results.length - success;
   return json({ ok: failed === 0, total: results.length, success, failed, results });
@@ -313,19 +332,34 @@ function routeKey(date) {
 async function handleRouteUpload(request, auth, env) {
   if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
+
   const body = await request.json();
   const date = (body.date || "").trim();
   const numbers = Array.isArray(body.numbers) ? [...new Set(body.numbers.map(x => String(x).trim()).filter(Boolean))].slice(0, 1000) : [];
   const label = (body.label || "").trim();
+  const tasks = Array.isArray(body.tasks) ? body.tasks.map(t => String(t).trim()).filter(Boolean) : [];
+
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Неверный формат даты" }, 400);
   if (!numbers.length) return json({ error: "Список номеров пуст" }, 400);
   if (!label || label.length > 100) return json({ error: "Неверное название маршрута" }, 400);
+
   const key = routeKey(date);
   const existing = await env.ROUTES.get(key, { type: "json" });
+
   const items = Array.isArray(existing?.items) ? existing.items : [];
   const filtered = items.filter(item => item.label !== label);
   filtered.push(...numbers.map(number => ({ number, label })));
-  await env.ROUTES.put(key, JSON.stringify({ date, items: filtered, completedRoutes: existing?.completedRoutes || {} }), { expirationTtl: ROUTE_TTL });
+
+  const tasksByLabel = (existing?.tasksByLabel && typeof existing.tasksByLabel === "object") ? { ...existing.tasksByLabel } : {};
+  tasksByLabel[label] = tasks;
+
+  await env.ROUTES.put(key, JSON.stringify({
+    date,
+    items: filtered,
+    tasksByLabel,
+    completedRoutes: existing?.completedRoutes || {}
+  }), { expirationTtl: ROUTE_TTL });
+
   return json({ ok: true, count: filtered.length });
 }
 
@@ -334,88 +368,13 @@ async function handleRouteGet(url, auth, env) {
   const date = (url.searchParams.get("date") || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Неверный формат даты" }, 400);
   if (!(await verifyAuth(auth))) return unauthorized();
+
   const data = await env.ROUTES.get(routeKey(date), { type: "json" });
   return json(data ? { found: true, ...data } : { found: false, date });
 }
 
-async function handleRouteComplete(request, auth, env) {
+async function handleRoutesList(auth, env) {
   if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
-  const body = await request.json();
-  const date = String(body.date || "").trim();
-  const label = String(body.label || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !label) return json({ error: "Неверные данные маршрута" }, 400);
-  const key = routeKey(date);
-  const data = await env.ROUTES.get(key, { type: "json" });
-  if (!data || !Array.isArray(data.items)) return json({ error: "Маршрут не найден" }, 404);
-  const completedRoutes = data.completedRoutes && typeof data.completedRoutes === "object" ? data.completedRoutes : {};
-  completedRoutes[label] = new Date().toISOString();
-  await env.ROUTES.put(key, JSON.stringify({ ...data, completedRoutes }), { expirationTtl: ROUTE_TTL });
-  return json({ ok: true, date, label, completedAt: completedRoutes[label] });
-}
 
-async function handlePhoto(url, auth, env) {
-  const number = (url.searchParams.get("number") || "").trim();
-  if (!number) return json({ error: "Не передан номер" }, 400);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  return json({ ok: false, error: "Просмотр фото не поддерживается этим Worker" }, 501);
-}
-
-// === ВОССТАНОВЛЕННЫЕ ФУНКЦИИ ДЛЯ ЗАГРУЗКИ ФОТО В BITRIX24 ===
-
-async function bitrixCall(webhook, method, payload) {
-  const r = await fetch(`${webhook}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || data.error) throw new Error(data.error_description || data.error || `Bitrix ${r.status}`);
-  return data;
-}
-
-async function handlePhotoUpload(request, auth, env) {
-  if (!env.BITRIX_WEBHOOK_URL) return json({ error: "Интеграция с Bitrix24 не настроена (BITRIX_WEBHOOK_URL)" }, 500);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  const body = await request.json();
-  const number = String(body.number || "").trim();
-  const photos = Array.isArray(body.photos) ? body.photos : [];
-  const by = String(body.by || "").trim();
-  if (!number) return json({ error: "Не передан номер отгрузки" }, 400);
-  if (!photos.length) return json({ error: "Нет фотографий" }, 400);
-  if (photos.length > 10) return json({ error: "За один раз можно загрузить максимум 10 фото" }, 400);
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-  const caption = `Отгрузка № ${number}${by ? ` (загрузил: ${by})` : ""}`;
-  let uploaded = 0;
-  const results = [];
-  for (let i = 0; i < photos.length; i++) {
-    const p = photos[i];
-    if (!p?.content) continue;
-    const name = String(p.name || `order-${number}-${i + 1}.jpg`).replace(/[^a-zA-Z0-9А-Яа-я._-]/g, "_");
-    const data = await bitrixCall(webhook, "im.v2.File.upload", {
-      dialogId: BITRIX_DIALOG_ID,
-      fields: { name, content: p.content, message: caption }
-    });
-    uploaded++;
-    results.push({ name, result: data.result });
-  }
-  return json({ ok: true, number, uploaded, results });
-}
-
-async function handleBitrixTest(auth, env) {
-  if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "BITRIX_WEBHOOK_URL не задан" }, 500);
-  if (!(await verifyAuth(auth))) return unauthorized();
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-  try {
-    const data = await bitrixCall(webhook, "im.dialog.get", { DIALOG_ID: BITRIX_DIALOG_ID });
-    return json({
-      ok: true,
-      chatId: BITRIX_CHAT_ID,
-      dialogId: BITRIX_DIALOG_ID,
-      chat: data.result || null,
-      message: "Вебхук имеет доступ к чату."
-    });
-  } catch (e) {
-    return json({ ok: false, chatId: BITRIX_CHAT_ID, dialogId: BITRIX_DIALOG_ID, error: String(e) }, 502);
-  }
-}
+  const list = await env.ROUTES.list({ prefix: "route:" });
