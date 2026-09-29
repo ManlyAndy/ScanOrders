@@ -9,17 +9,11 @@ const SESSION_TTL = 28800;
 const ROUTE_TTL = 15552000; // 180 дней
 
 const ALLOWED_MS_LOGINS = new Set([
-  "kovalkov@boss191",
-  "harunin@boss191",
-  "grishaev@boss191",
-  "absaluttinova@boss191"
+  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 const ALLOWED_ROUTE_LOGINS = new Set([
-  "kovalkov@boss191",
-  "harunin@boss191",
-  "grishaev@boss191",
-  "absaluttinova@boss191"
+  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
@@ -63,9 +57,13 @@ function isAllowedRouteLogin(username) {
 async function checkAuth(auth) {
   if (!auth?.startsWith("Basic ")) return 401;
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 сек таймаут
     const res = await fetch(`${API_BASE}/context/employee`, {
-      headers: { Authorization: auth, "Accept-Encoding": "gzip" }
+      headers: { Authorization: auth, "Accept-Encoding": "gzip" },
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
     return res.status;
   } catch {
     return 0;
@@ -156,16 +154,20 @@ export default {
       if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
       if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
       if (url.pathname === "/finish" && request.method === "POST") return await handleFinish(request, auth);
+      
+      if (url.pathname === "/route/details" && request.method === "POST") return await handleRouteDetails(request, auth);
+      
       if (url.pathname === "/route" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
         return await handleRouteUpload(request, auth, env);
       }
       if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
-      if (url.pathname === "/routes/list" && request.method === "GET") return await handleRoutesList(auth, env);
+      
       if (url.pathname === "/route/complete" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "У вас нет права изменять маршруты" }, 403);
         return await handleRouteComplete(request, auth, env);
       }
+      
       if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
       if (url.pathname === "/photo/upload" && request.method === "POST") return await handlePhotoUpload(request, auth, env);
       if (url.pathname === "/bitrix/test" && request.method === "GET") return await handleBitrixTest(auth, env);
@@ -175,11 +177,9 @@ export default {
     return json({ error: "Действие не разрешено" }, 403);
   }
 };
-
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
   if (!code) return json({ error: "Не передан номер" }, 400);
-  
   const filter = encodeURIComponent(`name=${code}`);
   const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state`, {
     headers: { Authorization: auth },
@@ -187,7 +187,6 @@ async function handleFind(url, auth) {
   });
   if (res.status === 401) return unauthorized();
   if (!res.ok) return json({ error: "Ошибка МойСклад" }, 502);
-  
   const data = await res.json();
   const row = data.rows && data.rows[0];
   if (!row) return json({ found: false });
@@ -197,10 +196,8 @@ async function handleFind(url, auth) {
   });
   if (!detailRes.ok) return json({ error: "Не удалось получить данные отгрузки" }, 502);
   const detail = await detailRes.json();
-  
   const stateName = detail.state ? detail.state.name : null;
   const places = extractPlaces(detail);
-  const deliveryAddress = extractDeliveryAddress(detail);
 
   return json({
     found: true,
@@ -210,19 +207,11 @@ async function handleFind(url, auth) {
     sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
     positionsCount: detail.positions && detail.positions.meta ? detail.positions.meta.size : "—",
     places,
-    deliveryAddress,
+    deliveryAddress: extractDeliveryAddress(detail),
     stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
   });
-}
-
-function extractDeliveryAddress(row) {
-  const addr = row.deliveryAddress;
-  if (!addr) return "";
-  if (typeof addr === "string") return addr;
-  if (typeof addr === "object") return addr.address || addr.name || "";
-  return String(addr);
 }
 
 function extractPlaces(row) {
@@ -238,6 +227,58 @@ function extractPlaces(row) {
     if (value.name !== undefined) return value.name;
   }
   return value;
+}
+
+function extractDeliveryAddress(row) {
+  const addr = row.deliveryAddress;
+  if (!addr) return "";
+  if (typeof addr === "string") return addr;
+  if (typeof addr === "object") return addr.address || addr.name || "";
+  return String(addr);
+}
+
+async function handleRouteDetails(request, auth) {
+  const body = await request.json();
+  const numbers = Array.isArray(body.numbers) ? body.numbers.map(String).filter(Boolean).slice(0, 100) : [];
+  if (!numbers.length) return json({ ok: true, details: [] });
+
+  const details = [];
+  // Обрабатываем батчами по 10, чтобы не перегружать API МойСклад
+  for (let i = 0; i < numbers.length; i += 10) {
+    const batch = numbers.slice(i, i + 10);
+    const batchResults = await Promise.all(batch.map(async (num) => {
+      try {
+        const filter = encodeURIComponent(`name=${num}`);
+        const res = await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state`, {
+          headers: { Authorization: auth },
+          cf: { cacheTtl: 0, cacheEverything: false }
+        });
+        if (!res.ok) return { number: num, places: null, deliveryAddress: "" };
+        const data = await res.json();
+        const row = data.rows && data.rows[0];
+        if (!row) return { number: num, places: null, deliveryAddress: "" };
+
+        const detailRes = await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state`, {
+          headers: { Authorization: auth }
+        });
+        if (!detailRes.ok) return { number: num, places: null, deliveryAddress: "" };
+        const detail = await detailRes.json();
+return {
+          number: num,
+          places: extractPlaces(detail),
+          deliveryAddress: extractDeliveryAddress(detail)
+        };
+      } catch (e) {
+        return { number: num, places: null, deliveryAddress: "" };
+      }
+    }));
+    details.push(...batchResults);
+    // Небольшая пауза между батчами, чтобы МойСклад не блокировал запросы
+    if (i + 10 < numbers.length) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+  return json({ ok: true, details });
 }
 
 async function handleShip(request, auth) {
@@ -332,8 +373,7 @@ async function handleFinish(request, auth) {
       results.push({ id, ok: false, error: "Ошибка соединения с МойСклад" });
     }
   }
-
-  const success = results.filter(x => x.ok || x.alreadyShipped).length;
+const success = results.filter(x => x.ok || x.alreadyShipped).length;
   const failed = results.length - success;
   return json({ ok: failed === 0, total: results.length, success, failed, results });
 }
@@ -384,20 +424,6 @@ async function handleRouteGet(url, auth, env) {
 
   const data = await env.ROUTES.get(routeKey(date), { type: "json" });
   return json(data ? { found: true, ...data } : { found: false, date });
-}
-
-async function handleRoutesList(auth, env) {
-  if (!env.ROUTES) return json({ error: "Хранилище маршрутов не подключено" }, 500);
-  if (!(await verifyAuth(auth))) return unauthorized();
-
-  const list = await env.ROUTES.list({ prefix: "route:" });
-  const dates = list.keys
-    .map(k => k.name.replace("route:", ""))
-    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-    .sort()
-    .reverse();
-
-  return json({ ok: true, dates });
 }
 
 async function handleRouteComplete(request, auth, env) {
@@ -475,7 +501,6 @@ async function handlePhotoUpload(request, auth, env) {
 
   return json({ ok: true, number, uploaded, results });
 }
-
 async function handleBitrixTest(auth, env) {
   if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "BITRIX_WEBHOOK_URL не задан" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
