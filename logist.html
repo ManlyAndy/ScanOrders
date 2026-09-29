@@ -1,85 +1,164 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Загрузка маршрута</title>
-<link rel="icon" href="icon-192.png">
 <style>
   * { box-sizing: border-box; }
   body {
-    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    background: #111827; color: #f3f4f6; min-height: 100vh; padding: 20px;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f7fa;
+    color: #222;
+    min-height: 100vh;
   }
-  h1 { font-size: 20px; }
-  input, select { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: 10px;
-    border: 1px solid #374151; background: #1f2937; color: #f3f4f6; font-size: 15px; }
-  button { width: 100%; padding: 14px; border-radius: 10px; border: none; font-size: 16px;
-    font-weight: 600; cursor: pointer; margin-bottom: 10px; }
-  .btn-primary { background: #2563eb; color: white; }
-  .btn-success { background: #16a34a; color: white; }
-  .error { color: #f87171; font-size: 14px; }
-  .ok-msg { color: #86efac; font-size: 14px; }
-  .card { background: #1f2937; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
-  .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .chip { background: #374151; padding: 6px 10px; border-radius: 999px; font-size: 13px; }
-  .hint { font-size: 13px; color: #9ca3af; }
-  label { font-size: 13px; color: #9ca3af; }
+  .screen { display: none; padding: 16px; max-width: 720px; margin: 0 auto; }
+  .screen.active, #screen-main[style*="block"] { display: block; }
+  h1 { font-size: 22px; margin: 8px 0 16px; text-align: center; }
+  h2 { font-size: 18px; margin: 16px 0 10px; }
+  h3 { font-size: 16px; margin: 12px 0 8px; }
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+  input[type="text"], input[type="password"], input[type="date"], select, textarea {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    background: #fff;
+    font-family: inherit;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  button {
+    padding: 12px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 6px;
+    margin-right: 6px;
+  }
+  .btn-primary { background: #007bff; color: #fff; }
+  .btn-secondary { background: #e9ecef; color: #333; }
+  .btn-success { background: #2ecc71; color: #fff; }
+  .hint { font-size: 13px; color: #777; margin: 6px 0; }
+  .error { color: #e74c3c; font-size: 14px; }
+  .chip {
+    display: inline-block;
+    background: #e9ecef;
+    padding: 4px 10px;
+    border-radius: 14px;
+    font-size: 13px;
+    margin: 3px;
+  }
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal-content {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    max-width: 500px;
+    width: 100%;
+  }
+  .history-section {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 2px solid #eee;
+  }
+  .history-item {
+    background: #fff;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    transition: background 0.2s;
+  }
+  .history-item:hover { background: #f0f7ff; }
+  .history-item.static { cursor: default; }
+  .history-item.static:hover { background: #fff; }
+  .history-date { font-weight: 700; margin-bottom: 6px; }
+  .history-labels { font-size: 0.9em; color: #666; word-break: break-word; }
 </style>
 </head>
 <body>
 
-<div id="screen-login">
+<div id="screen-login" class="screen" style="display:block;">
   <h1>Вход</h1>
-  <input id="login-user" type="text" placeholder="Логин (email) в МойСклад">
-  <input id="login-pass" type="password" placeholder="Пароль">
-  <button class="btn-primary" onclick="doLogin()">Войти</button>
-  <div id="login-error" class="error"></div>
+  <div class="card">
+    <input type="text" id="login-user" placeholder="Логин (email)" />
+    <input type="password" id="login-pass" placeholder="Пароль" />
+    <div id="login-error" class="error"></div>
+    <button class="btn-primary" onclick="doLogin()">Войти</button>
+  </div>
 </div>
 
-<div id="screen-main" style="display:none;">
+<div id="screen-main" class="screen" style="display:none;">
   <h1>Загрузка маршрута</h1>
 
-  <label>Дата отгрузки</label>
-  <input id="route-date" type="date">
+  <div class="card">
+    <label>Дата отгрузки</label>
+    <input type="date" id="route-date" />
 
-  <label>Тип маршрута</label>
-  <select id="route-label">
-    <option value="МСК">МСК</option>
-    <option value="ТК">ТК</option>
-     <option value="Найм">Найм</option>
-  </select>
+    <label>Тип маршрута</label>
+    <select id="route-label">
+      <option value="МСК">МСК</option>
+      <option value="ТК">ТК</option>
+      <option value="Найм">Найм</option>
+    </select>
 
-  <label>PDF со списком отгрузок (из печати в МойСклад)</label>
-  <input id="pdf-file" type="file" accept="application/pdf">
+    <label>PDF со списком отгрузок (из печати в МойСклад)</label>
+    <input type="file" id="pdf-file" accept="application/pdf" />
+    <div id="parse-status" class="hint"></div>
 
-  <div id="parse-status" class="hint"></div>
-
-  <div id="preview-card" class="card" style="display:none;">
-    <b id="preview-count"></b>
-    <div id="preview-chips" class="chip-list"></div>
-  </div>
-
-  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px;">
-    <button class="btn-secondary" id="task-btn" style="display:none;" onclick="openTaskModal()">Доп. задание</button>
-    <button class="btn-success" id="send-btn" style="display:none;" onclick="sendRoute()">Отправить маршрут</button>
-    <button class="btn-secondary" id="print-btn" style="display:none;" onclick="printRoute()">Распечатать маршрут</button>
-  </div>
-  <div id="task-preview" class="hint" style="margin-top:10px;"></div>
-  <div id="send-result"></div>
-
-  <div id="task-modal" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); align-items:center; justify-content:center; padding:16px; z-index:1000;">
-    <div class="card" style="width:min(560px,100%); background:#111827;">
-      <h3 style="margin-top:0;">Доп. задание</h3>
-      <p class="hint">Можно оставить пустым. Каждое задание — с новой строки.</p>
-      <textarea id="task-input" rows="8" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="Например:
-Забрать документы у поставщика
-Отвезти коробку на склад"></textarea>
-      <div style="display:flex; gap:8px; margin-top:12px;">
-        <button class="btn-success" onclick="saveTasks()">Сохранить</button>
-        <button class="btn-secondary" onclick="closeTaskModal()">Отмена</button>
-      </div>
+    <div id="preview-card" style="display:none;">
+      <div id="preview-count" style="font-weight:600;margin:10px 0 6px;"></div>
+      <div id="preview-chips"></div>
+      <div id="task-preview" class="hint" style="margin-top:10px;"></div>
     </div>
+
+    <div style="margin-top:14px;">
+      <button class="btn-secondary" id="task-btn" onclick="openTaskModal()" style="display:none;">Доп. задание</button>
+      <button class="btn-primary" id="send-btn" onclick="sendRoute()" style="display:none;">Отправить маршрут</button>
+      <button class="btn-success" id="print-btn" onclick="printRoute()" style="display:none;">Распечатать маршрут</button>
+    </div>
+
+    <div id="send-result" class="hint" style="margin-top:10px;"></div>
+
+    <button class="btn-secondary" onclick="logout()" style="margin-top:20px;">Выйти</button>
+  </div>
+
+  <div class="history-section">
+    <h3>История маршрутов</h3>
+    <button class="btn-secondary" onclick="loadHistory()">Загрузить историю</button>
+    <div id="history-list" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<div id="task-modal" class="modal-overlay">
+  <div class="modal-content">
+    <h2>Доп. задание</h2>
+    <p class="hint">Можно оставить пустым. Каждое задание — с новой строки.</p>
+    <textarea id="task-input" placeholder="Забрать документы у поставщика&#10;Заехать на склад"></textarea>
+    <button class="btn-primary" onclick="saveTasks()">Сохранить</button>
+    <button class="btn-secondary" onclick="closeTaskModal()">Отмена</button>
   </div>
 </div>
 
