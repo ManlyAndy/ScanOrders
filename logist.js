@@ -1,5 +1,5 @@
 // ===========================================================
-// Логика страницы логиста
+// Логика страницы логиста: вход, разбор PDF, отправка маршрута, история
 // ===========================================================
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -27,6 +27,9 @@ function logout() {
 
 window.addEventListener("load", () => {
   document.getElementById("route-date").valueAsDate = new Date();
+  const historyDateEl = document.getElementById("history-date");
+  if (historyDateEl) historyDateEl.valueAsDate = new Date();
+  
   if (getSavedAuth()) {
     document.getElementById("screen-login").style.display = "none";
     document.getElementById("screen-main").style.display = "block";
@@ -147,7 +150,6 @@ async function handleFile(e) {
     );
 
     parsedData = results;
-
     statusEl.innerHTML = `Найдено номеров: ${parsedData.length}`;
     document.getElementById("preview-count").textContent = `Отгрузки в маршруте (${parsedData.length}):`;
     document.getElementById("preview-chips").innerHTML = parsedData
@@ -209,7 +211,6 @@ async function sendRoute() {
     resultEl.innerHTML = 'Нет соединения с сервером.';
   }
 }
-
 function printRoute() {
   if (!lastSentRoute) return;
   const esc = (v) => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -244,36 +245,16 @@ ul{margin:0;padding-left:20px;}
   w.document.close();
 }
 
-async function loadHistory() {
+async function showHistoryForDate() {
+  const date = document.getElementById("history-date").value;
   const listEl = document.getElementById("history-list");
-  listEl.innerHTML = '<div class="hint">Загружаю…</div>';
-
-  try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/routes/list`, {
-      headers: { Authorization: getSavedAuth() }
-    });
-    if (res.status === 401) { logout(); return; }
-    const data = await res.json();
-
-    if (!data.ok || !data.dates || !data.dates.length) {
-      listEl.innerHTML = '<div class="hint">История пуста</div>';
-      return;
-    }
-
-    listEl.innerHTML = data.dates.map(date => {
-      return `<div class="history-item" onclick="showRouteDetails('${date}')">
-        <div class="history-date">${date}</div>
-        <div class="history-labels">Нажмите для просмотра деталей</div>
-      </div>`;
-    }).join("");
-  } catch (e) {
-    listEl.innerHTML = '<div class="hint">Не удалось загрузить историю</div>';
+  
+  if (!date) {
+    listEl.innerHTML = '<div class="hint">Выберите дату</div>';
+    return;
   }
-}
-
-async function showRouteDetails(date) {
-  const listEl = document.getElementById("history-list");
-  listEl.innerHTML = '<div class="hint">Загружаю детали…</div>';
+  
+  listEl.innerHTML = '<div class="hint">Загружаю маршрут…</div>';
 
   try {
     const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${date}`, {
@@ -283,7 +264,7 @@ async function showRouteDetails(date) {
     const data = await res.json();
 
     if (!data.found) {
-      listEl.innerHTML = '<div class="hint">Маршрут не найден</div>';
+      listEl.innerHTML = `<div class="hint">На ${date} маршрутов не найдено</div>`;
       return;
     }
 
@@ -294,24 +275,53 @@ async function showRouteDetails(date) {
     });
 
     const tasksByLabel = data.tasksByLabel || {};
+    const completedRoutes = data.completedRoutes || {};
 
     let html = `<div style="margin-bottom:12px;"><strong>Маршрут на ${date}</strong></div>`;
+ for (const [label, numbers] of Object.entries(labels)) {
+      const completed = completedRoutes[label];
+      const scannedSet = completed && Array.isArray(completed.scanned) ? new Set(completed.scanned) : null;
+      
+      html += `<div class="history-item">
+        <div class="history-date">${label} (${numbers.length} отгрузок)`;
+      
+      if (completed) {
+        const completedDate = new Date(completed.completedAt).toLocaleString('ru-RU');
+        html += ` <span style="color:#2ecc71;font-size:0.85em;">✓ Закрыт ${completedDate}</span>`;
+      } else {
+        html += ` <span style="color:#95a5a6;font-size:0.85em;">Не закрыт</span>`;
+      }
+      
+      html += `</div><div class="history-labels">`;
 
-    for (const [label, numbers] of Object.entries(labels)) {
-      html += `<div class="history-item static">
-        <div class="history-date">${label} (${numbers.length} отгрузок)</div>
-        <div class="history-labels">${numbers.map(n => `№${n}`).join(", ")}</div>`;
+      if (scannedSet) {
+        html += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+        numbers.forEach(num => {
+          const wasScanned = scannedSet.has(num);
+          const statusClass = wasScanned ? 'status-shipped' : 'status-other';
+          const statusText = wasScanned ? '✓' : '—';
+          html += `<div style="display:inline-flex;align-items:center;background:#f9f9f9;padding:4px 8px;border-radius:6px;">
+            <span>№${num}</span>
+            <span class="status-badge ${statusClass}">${statusText}</span>
+          </div>`;
+        });
+        html += '</div>';
+        
+        const scannedCount = numbers.filter(n => scannedSet.has(n)).length;
+        html += `<div style="margin-top:8px;font-size:0.9em;color:#555;"><strong>Отсканировано:</strong> ${scannedCount} из ${numbers.length}</div>`;
+      } else {
+        html += numbers.map(n => `№${n}`).join(", ");
+      }
 
       if (tasksByLabel[label] && tasksByLabel[label].length) {
         html += `<div style="margin-top:8px;font-size:0.9em;color:#555;"><strong>Задания:</strong> ${tasksByLabel[label].join("; ")}</div>`;
       }
 
-      html += `</div>`;
+      html += `</div></div>`;
     }
 
-    html += `<button class="btn-secondary" onclick="loadHistory()" style="margin-top:12px;">← Назад к списку дат</button>`;
     listEl.innerHTML = html;
   } catch (e) {
-    listEl.innerHTML = '<div class="hint">Не удалось загрузить детали</div>';
+    listEl.innerHTML = '<div class="hint">Не удалось загрузить маршрут</div>';
   }
 }
