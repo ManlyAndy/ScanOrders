@@ -25,8 +25,6 @@
   .chip { background: #374151; padding: 6px 10px; border-radius: 999px; font-size: 13px; }
   .hint { font-size: 13px; color: #9ca3af; }
   label { font-size: 13px; color: #9ca3af; }
-  select:disabled { opacity: 0.85; color: #f3f4f6; }
-  button:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
@@ -40,21 +38,19 @@
 </div>
 
 <div id="screen-main" style="display:none;">
-  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
-    <h1 style="margin-bottom:14px;">Загрузка маршрута</h1>
-    <button class="link-btn" style="width:auto;background:none;color:#93c5fd;text-decoration:underline;padding:4px;margin-bottom:10px;" onclick="logout()">Выйти</button>
-  </div>
+  <h1>Загрузка маршрута</h1>
 
-  <label>Дата отгрузки (подставляется из названия файла)</label>
-  <input id="route-date" type="text" inputmode="numeric" placeholder="например 28.08.2026" autocomplete="off">
+  <label>Дата отгрузки</label>
+  <input id="route-date" type="date">
 
-  <label>Тип маршрута (определяется по названию файла: МСК или ТК)</label>
+  <label>Тип маршрута</label>
   <select id="route-label">
     <option value="МСК">МСК</option>
     <option value="ТК">ТК</option>
+     <option value="Найм">Найм</option>
   </select>
 
-  <label>PDF со списком отгрузок. В названии файла должны быть тип и дата, например: МСК_28.08.pdf</label>
+  <label>PDF со списком отгрузок (из печати в МойСклад)</label>
   <input id="pdf-file" type="file" accept="application/pdf">
 
   <div id="parse-status" class="hint"></div>
@@ -64,20 +60,26 @@
     <div id="preview-chips" class="chip-list"></div>
   </div>
 
-  <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-    <input id="replace-route" type="checkbox" style="width:auto;margin:0;">
-    Заменить маршрут целиком (новые номера добавляются к уже загруженным)
-  </label>
-
-  <button class="btn-success" id="send-btn" style="display:none;" onclick="sendRoute()">Отправить маршрут</button>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px;">
+    <button class="btn-secondary" id="task-btn" style="display:none;" onclick="openTaskModal()">Доп. задание</button>
+    <button class="btn-success" id="send-btn" style="display:none;" onclick="sendRoute()">Отправить маршрут</button>
+    <button class="btn-secondary" id="print-btn" style="display:none;" onclick="printRoute()">Распечатать маршрут</button>
+  </div>
+  <div id="task-preview" class="hint" style="margin-top:10px;"></div>
   <div id="send-result"></div>
 
-  <div class="card" style="margin-top:20px;">
-    <h2 style="font-size:18px;margin-top:0;">Отгруженные ранее</h2>
-    <label>Выберите дату</label>
-    <input id="history-date" type="date">
-    <button class="btn-primary" onclick="loadRouteHistory()">Показать маршруты</button>
-    <div id="history-result" class="hint"></div>
+  <div id="task-modal" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); align-items:center; justify-content:center; padding:16px; z-index:1000;">
+    <div class="card" style="width:min(560px,100%); background:#111827;">
+      <h3 style="margin-top:0;">Доп. задание</h3>
+      <p class="hint">Можно оставить пустым. Каждое задание — с новой строки.</p>
+      <textarea id="task-input" rows="8" style="width:100%; box-sizing:border-box; resize:vertical;" placeholder="Например:
+Забрать документы у поставщика
+Отвезти коробку на склад"></textarea>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn-success" onclick="saveTasks()">Сохранить</button>
+        <button class="btn-secondary" onclick="closeTaskModal()">Отмена</button>
+      </div>
+    </div>
   </div>
 </div>
 
