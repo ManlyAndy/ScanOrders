@@ -201,7 +201,6 @@ async function handleFind(url, auth) {
   const detail = await detailRes.json();
   const stateName = detail.state ? detail.state.name : null;
   const places = extractPlaces(detail);
-  const deliveryAddress = extractDeliveryAddress(detail);
 
   return json({
     found: true,
@@ -211,7 +210,7 @@ async function handleFind(url, auth) {
     sum: detail.sum ? (detail.sum / 100).toFixed(2) : "—",
     positionsCount: (detail.positions && detail.positions.meta) ? detail.positions.meta.size : "—",
     places: places,
-    deliveryAddress: deliveryAddress,
+    description: detail.description || "",
     stateName: stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
