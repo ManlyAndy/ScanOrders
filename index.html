@@ -137,6 +137,24 @@
   }
   .modal-row.scanned { opacity: 0.5; text-decoration: line-through; }
   .check { color: #2ecc71; font-weight: 700; }
+  .modal-row.clickable { cursor: pointer; align-items: center; }
+ .modal-row.clickable:active { background: #f0f4ff; }
+  .modal-row .arrow { color: #999; margin-left: 10px; }
+  .photo-block { margin-top: 12px; }
+  .photo-title { font-weight: 700; margin-bottom: 8px; }
+  .photo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .photo-cell {
+    background: #e9ecef; border-radius: 8px; overflow: hidden;
+    aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #777; text-align: center;
+  }
+  .photo-cell img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+  #photo-viewer {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+    z-index: 200; align-items: center; justify-content: center;
+  }
+  #photo-viewer.active { display: flex; }
+  #photo-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
 </style>
 </head>
 <body>
@@ -144,7 +162,7 @@
 <div id="screen-login" class="screen">
   <h1>Вход — Контроль отгрузок</h1>
   <div class="card">
-    <p class="hint">Введите ваш обычный логин и пароль от МойСклад. Они сохранятся только на этом телефоне.</p>
+    <p class="hint">Введите логин и пароль от МойСклад.</p>
     <input type="text" id="login-user" placeholder="Логин (email)" autocomplete="username" />
     <input type="password" id="login-pass" placeholder="Пароль" autocomplete="current-password" />
     <div id="login-error" class="error"></div>
@@ -187,7 +205,7 @@
 
 <div id="screen-result" class="screen">
   <div id="result-body"></div>
-  <button class="btn-secondary" onclick="backToScan()">← Сканировать следующий</button>
+  <button class="btn-secondary" id="back-btn" onclick="backToScan()">← Сканировать следующий</button>
 </div>
 
 <div id="route-modal" class="modal-overlay">
@@ -198,7 +216,7 @@
     <button class="btn-secondary" onclick="closeRouteModal()">Закрыть окно</button>
   </div>
 </div>
-
+<div id="photo-viewer" onclick="closePhoto()"><img id="photo-viewer-img" alt="" /></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
