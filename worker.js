@@ -366,7 +366,59 @@ async function handleRouteGet(url, auth, env) {
   const data = await env.ROUTES.get(routeKey(date), { type: "json" });
   return json(data ? { found: true, date: data.date, items: data.items, tasksByLabel: data.tasksByLabel, completedRoutes: data.completedRoutes } : { found: false, date: date });
 }
+async function handleRouteDetails(request, auth) {
+  if (!(await verifyAuth(auth))) return unauthorized();
 
+  const body = await request.json();
+  const numbers = Array.isArray(body.numbers)
+    ? [...new Set(body.numbers.map(x => String(x).trim()).filter(Boolean))]
+    : [];
+
+  if (!numbers.length) {
+    return json({ details: [] });
+  }
+
+  const details = [];
+
+  for (const number of numbers) {
+    try {
+      const url =
+        API_BASE +
+        "/entity/demand?filter=name=" +
+        encodeURIComponent(number) +
+        "&expand=state,agent";
+
+      const res = await fetch(url, {
+        headers: {
+          "Authorization": auth,
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json"
+        }
+      });
+
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const row = data.rows && data.rows[0];
+
+      if (!row) continue;
+
+      details.push({
+        number: row.name || number,
+        deliveryAddress:
+          row.deliveryAddress ||
+          row.address ||
+          (row.agent && row.agent.actualAddress) ||
+          "",
+        places: extractPlaces(row)
+      });
+    } catch (e) {
+      console.error("Ошибка получения деталей", number, e);
+    }
+  }
+
+  return json({ details });
+}
 async function handleRouteComplete(request, auth, env) {
   if (!env.ROUTES) return json({ error: "Хранилище не подключено" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
@@ -465,6 +517,8 @@ export default {
         return await handleRouteUpload(request, auth, env);
       }
       if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
+      if (url.pathname === "/route/details" && request.method === "POST") {
+  return await handleRouteDetails(request, auth);}
       if (url.pathname === "/route/complete" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "Нет прав" }, 403);
         return await handleRouteComplete(request, auth, env);
