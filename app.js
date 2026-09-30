@@ -6,6 +6,9 @@ let currentResult = null;
 let currentRoute = null;
 let selectedRouteType = "МСК";
 let isScannerActive = false;
+let openedFromList = false;
+let photoReqId = 0;
+let photoUrls = [];
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -87,9 +90,9 @@ function renderModalList() {
   listEl.innerHTML = sorted
     .map((num) => {
       const scanned = currentRoute.scanned.has(num);
-      return `<div class="modal-row ${scanned ? "scanned" : ""}">
+      return `<div class="modal-row clickable ${scanned ? "scanned" : ""}" data-num="${escapeAttr(num)}" onclick="openFromList(this.dataset.num)">
         <span>№ ${escapeHtml(num)}</span>
-        <span class="check">${scanned ? "✓" : ""}</span>
+        <span><span class="check">${scanned ? "✓" : ""}</span><span class="arrow">›</span></span>
       </div>`;
     })
     .join("");
@@ -295,10 +298,25 @@ function submitManual() {
 function backToScan() {
   document.getElementById("manual-input-wrap").style.display = "none";
   document.getElementById("manual-input").value = "";
+  photoReqId++;
   show("scan");
+  if (openedFromList) {
+    openedFromList = false;
+    openRouteModal();
+  }
+}
+function openFromList(num) {
+  if (!num) return;
+  closeRouteModal();
+  lookupCode(String(num), { fromList: true });
 }
 // ---------- ПОИСК И ОТОБРАЖЕНИЕ ----------
-async function lookupCode(code) {
+async function lookupCode(code, opts) {
+  const fromList = !!(opts && opts.fromList);
+  openedFromList = fromList;
+  const backBtn = document.getElementById("back-btn");
+  if (backBtn) backBtn.textContent = fromList ? "← К списку" : "← Сканировать следующий";
+  photoReqId++;
   show("result");
   const body = document.getElementById("result-body");
   body.innerHTML = '<div class="spinner"></div><p class="hint">Ищу отгрузку ' + escapeHtml(code) + '…</p>';
@@ -320,7 +338,7 @@ async function lookupCode(code) {
     currentResult = data;
     
     // Если отгрузка из маршрута - сразу отмечаем её как отсканированную
-    if (currentRoute && currentRoute.numbers.includes(data.name)) {
+    if (!fromList && currentRoute && currentRoute.numbers.includes(data.name)) {
       if (!currentRoute.scanned.has(data.name)) {
         currentRoute.scanned.add(data.name);
         saveRouteToStorage();
@@ -337,6 +355,7 @@ async function lookupCode(code) {
     } else {
       renderReady(data);
     }
+    loadPhotos(data.name);
   } catch (e) {
     clearTimeout(timeoutId);
     if (e.name === "AbortError") {
@@ -383,12 +402,8 @@ function renderReady(data) {
   const wasScanned = inRoute && currentRoute.scanned.has(data.name);
   
   let statusText = '';
-  if (inRoute) {
-    if (wasScanned) {
-      statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
-    } else {
-      statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
-    }
+  if (wasScanned) {
+    statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
   }
   
   document.getElementById("result-body").innerHTML = `<div class="card ok">
@@ -405,6 +420,75 @@ function escapeHtml(str) {
   const d = document.createElement("div");
   d.textContent = str;
   return d.innerHTML;
+}
+function escapeAttr(str) {
+  return escapeHtml(String(str)).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// ---------- ФОТО ИЗ БИТРИКС24 ----------
+async function loadPhotos(number) {
+  const reqId = ++photoReqId;
+  photoUrls.forEach((u) => URL.revokeObjectURL(u));
+  photoUrls = [];
+  const body = document.getElementById("result-body");
+  const block = document.createElement("div");
+  block.className = "photo-block";
+  block.innerHTML = '<div class="hint">Загружаю фото…</div>';
+  body.appendChild(block);
+  const headers = { Authorization: getSavedAuth() };
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}`, { headers });
+    if (reqId !== photoReqId) return;
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      block.innerHTML = '<div class="hint">Не удалось загрузить фото' + (data.error ? ": " + escapeHtml(data.error) : "") + "</div>";
+      return;
+    }
+    const photos = data.photos || [];
+    if (!photos.length) {
+      block.innerHTML = '<div class="hint">Фото к этой отгрузке не найдены</div>';
+      return;
+    }
+    block.innerHTML = '<div class="photo-title">Фото отгрузки</div><div class="photo-grid"></div>';
+    const grid = block.querySelector(".photo-grid");
+    const cells = photos.map(() => {
+      const c = document.createElement("div");
+      c.className = "photo-cell";
+      c.textContent = "Загрузка…";
+      grid.appendChild(c);
+      return c;
+    });
+    await Promise.all(photos.map(async (p, i) => {
+      try {
+        const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(p.id)}`, { headers });
+        if (!r.ok) throw new Error("bad");
+        const blob = await r.blob();
+        if (reqId !== photoReqId) return;
+        const src = URL.createObjectURL(blob);
+        photoUrls.push(src);
+        const img = document.createElement("img");
+        img.alt = p.name || "";
+        img.src = src;
+        img.onclick = () => openPhoto(src);
+        cells[i].textContent = "";
+        cells[i].appendChild(img);
+      } catch (e) {
+        cells[i].textContent = "Не удалось загрузить";
+      }
+    }));
+  } catch (e) {
+    if (reqId !== photoReqId) return;
+    block.innerHTML = '<div class="hint">Не удалось загрузить фото — проверьте интернет</div>';
+  }
+}
+function openPhoto(src) {
+  document.getElementById("photo-viewer-img").src = src;
+  document.getElementById("photo-viewer").classList.add("active");
+}
+function closePhoto() {
+  document.getElementById("photo-viewer").classList.remove("active");
+  document.getElementById("photo-viewer-img").src = "";
 }
 
 // ---------- ЗАКРЫТИЕ МАРШРУТА ----------
