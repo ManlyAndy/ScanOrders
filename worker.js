@@ -8,8 +8,13 @@ const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 const SESSION_TTL = 28800;
 const ROUTE_TTL = 15552000;
 
-const ALLOWED_MS_LOGINS = new Set(["kovalkov@boss191","harunin@boss191","grishaev@boss191","absaluttinova@boss191"]);
-const ALLOWED_ROUTE_LOGINS = new Set(["kovalkov@boss191","harunin@boss191","grishaev@boss191","absaluttinova@boss191"]);
+const ALLOWED_MS_LOGINS = new Set([
+  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
+].map(v => v.trim().toLowerCase()).filter(Boolean));
+
+const ALLOWED_ROUTE_LOGINS = new Set([
+  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
+].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
   return {
@@ -140,46 +145,6 @@ function extractPlaces(row) {
   return value;
 }
 
-function extractDeliveryAddress(row) {
-  // 1. Ищем кастомное поле "Адрес доставки" в attributes (приоритет)
-  const attrs = Array.isArray(row.attributes) ? row.attributes : [];
-  for (let i = 0; i < attrs.length; i++) {
-    const attrName = String(attrs[i].name || "").trim().toLowerCase();
-    if (attrName === "адрес доставки" || attrName === "адрес") {
-      return extractAttrValue(attrs[i].value);
-    }
-  }
-  // 2. Ищем по ключевым словам
-  for (let i = 0; i < attrs.length; i++) {
-    const attrName = String(attrs[i].name || "").toLowerCase();
-    if (attrName.indexOf("адрес") >= 0 || attrName.indexOf("доставк") >= 0) {
-      return extractAttrValue(attrs[i].value);
-    }
-  }
-  // 3. Стандартное поле deliveryAddress (на всякий случай)
-  if (row.deliveryAddress) {
-    if (typeof row.deliveryAddress === "string") return row.deliveryAddress;
-    if (typeof row.deliveryAddress === "object") {
-      if (row.deliveryAddress.address) return row.deliveryAddress.address;
-      if (row.deliveryAddress.name) return row.deliveryAddress.name;
-      if (row.deliveryAddress.fullAddress) return row.deliveryAddress.fullAddress;
-    }
-  }
-  return "";
-}
-
-function extractAttrValue(value) {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "object") {
-    // МойСклад часто хранит значение как {value: "..."} или {name: "..."}
-    if (value.value !== undefined && typeof value.value !== "object") return String(value.value);
-    if (value.name !== undefined && typeof value.name !== "object") return String(value.name);
-    // Если это ссылка на справочник — берём name
-    if (value.meta && value.name) return String(value.name);
-  }
-  return String(value);
-}
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
   if (!code) return json({ error: "Не передан номер" }, 400);
@@ -365,59 +330,7 @@ async function handleRouteGet(url, auth, env) {
   const data = await env.ROUTES.get(routeKey(date), { type: "json" });
   return json(data ? { found: true, date: data.date, items: data.items, tasksByLabel: data.tasksByLabel, completedRoutes: data.completedRoutes } : { found: false, date: date });
 }
-async function handleRouteDetails(request, auth) {
-  if (!(await verifyAuth(auth))) return unauthorized();
 
-  const body = await request.json();
-  const numbers = Array.isArray(body.numbers)
-    ? [...new Set(body.numbers.map(x => String(x).trim()).filter(Boolean))]
-    : [];
-
-  if (!numbers.length) {
-    return json({ details: [] });
-  }
-
-  const details = [];
-
-  for (const number of numbers) {
-    try {
-      const url =
-        API_BASE +
-        "/entity/demand?filter=name=" +
-        encodeURIComponent(number) +
-        "&expand=state,agent";
-
-      const res = await fetch(url, {
-        headers: {
-          "Authorization": auth,
-          "Accept-Encoding": "gzip",
-          "Content-Type": "application/json"
-        }
-      });
-
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      const row = data.rows && data.rows[0];
-
-      if (!row) continue;
-
-      details.push({
-        number: row.name || number,
-        deliveryAddress:
-          row.deliveryAddress ||
-          row.address ||
-          (row.agent && row.agent.actualAddress) ||
-          "",
-        places: extractPlaces(row)
-      });
-    } catch (e) {
-      console.error("Ошибка получения деталей", number, e);
-    }
-  }
-
-  return json({ details });
-}
 async function handleRouteComplete(request, auth, env) {
   if (!env.ROUTES) return json({ error: "Хранилище не подключено" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
@@ -516,8 +429,6 @@ export default {
         return await handleRouteUpload(request, auth, env);
       }
       if (url.pathname === "/route" && request.method === "GET") return await handleRouteGet(url, auth, env);
-      if (url.pathname === "/route/details" && request.method === "POST") {
-  return await handleRouteDetails(request, auth);}
       if (url.pathname === "/route/complete" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "Нет прав" }, 403);
         return await handleRouteComplete(request, auth, env);
