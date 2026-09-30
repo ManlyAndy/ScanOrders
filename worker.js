@@ -232,23 +232,23 @@ async function handleRouteDetails(request, auth) {
           headers: { "Authorization": auth },
           cf: { cacheTtl: 0 }
         });
-        if (!res.ok) return { number: num, places: null, deliveryAddress: "" };
+        if (!res.ok) return { number: num, places: null, description: "" };
         const data = await res.json();
         const row = data.rows && data.rows[0];
-        if (!row) return { number: num, places: null, deliveryAddress: "" };
+        if (!row) return { number: num, places: null, description: "" };
 
         const detailRes = await fetch(API_BASE + "/entity/demand/" + row.id + "?expand=agent,state", {
           headers: { "Authorization": auth }
         });
-        if (!detailRes.ok) return { number: num, places: null, deliveryAddress: "" };
+        if (!detailRes.ok) return { number: num, places: null, description: "" };
         const detail = await detailRes.json();
 
         return {
           number: num,
           places: extractPlaces(detail),
-          deliveryAddress: extractDeliveryAddress(detail)
+          description: detail.description || ""
         };
-      } catch (e) { return { number: num, places: null, deliveryAddress: "" }; }
+      } catch (e) { return { number: num, places: null, description: "" }; }
     }));
     details.push.apply(details, batchResults);
     if (i + 10 < numbers.length) await new Promise(function(r) { setTimeout(r, 200); });
