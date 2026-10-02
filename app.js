@@ -393,7 +393,7 @@ async function loadPhotos(number) {
     const data = await res.json();
     if (data.photos && data.photos.length > 0) {
       photoList.innerHTML = data.photos.map(function(photo) {
-        return '<img src="' + CONFIG.PROXY_URL + '/photo/file?id=' + photo.id + '" alt="' + escapeHtml(photo.name) + '" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid #ddd;" />';
+        return '<img src="' + CONFIG.PROXY_URL + '/photo/file?id=' + photo.id + '" alt="' + photo.name + '" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid #ddd;" />';
       }).join("");
     } else {
       photoList.innerHTML = '<div class="hint">Фотографий нет</div>';
