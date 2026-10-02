@@ -417,17 +417,61 @@ async function findPhotoFiles(webhook, number) {
 async function handlePhoto(url, auth, env) {
   const number = (url.searchParams.get("number") || "").trim();
   if (!number) return json({ error: "Не передан номер" }, 400);
-  if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "Bitrix не настроен" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
-  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+  if (!env.BITRIX_WEBHOOK_URL || !env.ROUTES) return json({ error: "Bitrix не настроен" }, 500);
+
   try {
-    const files = await findPhotoFiles(webhook, number);
-    if (env.ROUTES) {
-      await Promise.all(files.map(function(f) {
-        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: 3600 });
-      }));
+    const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+    const files = [];
+    let lastId = null;
+    let checked = 0;
+    const maxMessages = 200;
+
+    while (checked < maxMessages) {
+      const params = {
+        DIALOG_ID: BITRIX_DIALOG_ID,
+        LIMIT: 50
+      };
+      if (lastId) params.LAST_ID = lastId;
+
+      const res = await fetch(webhook + "/im.dialog.messages.get", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params)
+      });
+
+      if (!res.ok) break;
+      const data = await res.json();
+      const messages = data.result || [];
+
+      if (messages.length === 0) break;
+
+      for (let i = 0; i < messages.length; i++) {
+        checked++;
+        const msg = messages[i];
+        const text = String(msg.message || "").toLowerCase();
+        const needle = "отгрузка №" + number.toLowerCase();
+
+        if (text.indexOf(needle) >= 0) {
+          const attach = msg.attach || msg.ATTACH || [];
+          if (Array.isArray(attach)) {
+            for (let j = 0; j < attach.length; j++) {
+              const att = attach[j];
+              if (att && att.type === "image" && att.url) {
+                const fileId = "bf" + Date.now() + "_" + files.length;
+                await env.ROUTES.put("pf:" + fileId, JSON.stringify({ url: att.url }), { expirationTtl: 3600 });
+                files.push({ id: fileId, name: att.name || "photo.jpg" });
+              }
+            }
+          }
+        }
+        lastId = msg.id;
+      }
+
+      if (messages.length < 50) break;
     }
-    return json({ ok: true, number: number, photos: files.map(function(f) { return { id: f.id, name: f.name }; }) });
+
+    return json({ ok: true, number: number, photos: files });
   } catch (e) {
     return json({ ok: false, error: String((e && e.message) || e) }, 502);
   }
