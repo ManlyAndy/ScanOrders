@@ -407,7 +407,7 @@ async function findPhotoFiles(webhook, number) {
         }
       }
     }
-    if (found.size && !matched) break;
+   
     if (!isFinite(minId) || minId === lastId) break;
     lastId = minId;
   }
