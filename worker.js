@@ -462,7 +462,7 @@ async function handlePhoto(url, auth, env) {
     }
     
     return json({ photos: photos });
-  } catch (e) {
+   catch (e) {
     return json({ photos: [] });
   }
 }
