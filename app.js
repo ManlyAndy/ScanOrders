@@ -359,29 +359,26 @@ function renderNotInRoute(data) {
 function renderReady(data) {
   const inRoute = currentRoute && currentRoute.numbers.includes(data.name);
   const wasScanned = inRoute && currentRoute.scanned.has(data.name);
-
   let statusText = '';
   if (inRoute) {
     statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
   }
-
-  document.getElementById("result-body").innerHTML = `<div class="card ok">
-    <div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div>
-    <div class="num">№ ${escapeHtml(data.name)}</div>
-    <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-    <div class="meta">Позиций в заказе: <b>${escapeHtml(String(data.positionsCount))}</b></div>
-    <div class="meta">Количество мест: <b>${escapeHtml(String(data.places ?? "—"))}</b></div>
-    <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
-    ${statusText}
-  </div>
-  <div id="photo-section" style="margin-top:16px;">
-    <h3 style="margin:0 0 8px;">Фотографии отгрузки</h3>
-    <div id="photo-list" style="display:flex;flex-wrap:wrap;gap:8px;">
-      <div class="hint">Загрузка фото...</div>
-    </div>
-  </div>`;
-  
-  // Загружаем фото после отображения карточки
+  document.getElementById("result-body").innerHTML = 
+    '<div class="card ok">' +
+    '<div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div>' +
+    '<div class="num">№ ' + escapeHtml(data.name) + '</div>' +
+    '<div class="meta">Покупатель: <b>' + escapeHtml(data.agentName) + '</b></div>' +
+    '<div class="meta">Позиций в заказе: <b>' + escapeHtml(String(data.positionsCount)) + '</b></div>' +
+    '<div class="meta">Количество мест: <b>' + escapeHtml(String(data.places !== null && data.places !== undefined ? data.places : "—")) + '</b></div>' +
+    '<div class="meta">Сумма: <b>' + escapeHtml(String(data.sum)) + ' ₽</b></div>' +
+    statusText +
+    '</div>' +
+    '<div id="photo-section" style="margin-top:16px;">' +
+    '<h3 style="margin:0 0 8px;">Фотографии отгрузки</h3>' +
+    '<div id="photo-list" style="display:flex;flex-wrap:wrap;gap:8px;">' +
+    '<div class="hint">Загрузка фото...</div>' +
+    '</div>' +
+    '</div>';
   loadPhotos(data.name);
 }
 async function loadPhotos(number) {
