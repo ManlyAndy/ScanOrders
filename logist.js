@@ -63,8 +63,31 @@ document.addEventListener("DOMContentLoaded", function() {
 });
 
 async function handleFile(e) {
-  var file = e.target.files[0];
+  const file = e.target.files[0];
   if (!file) return;
+
+  const fileName = file.name ? file.name.replace(/\.[^.]+$/, "").toUpperCase() : "";
+  const selectedType = document.getElementById("route-label").value.toUpperCase();
+  let detectedType = null;
+
+  if (/^МСК\d/i.test(fileName) || /^MSK\d/i.test(fileName)) detectedType = "МСК";
+  else if (/^ТК\d/i.test(fileName) || /^TK\d/i.test(fileName)) detectedType = "ТК";
+  else if (/^НАЙМ\d/i.test(fileName) || /^HIRE\d/i.test(fileName) || /^NAIM\d/i.test(fileName)) detectedType = "Найм";
+
+  let warning = null;
+  if (!detectedType) {
+    warning = 'Файл "' + file.name + '" не соответствует формату имени.\n\nТребуемый формат: МСК30092026.pdf, ТК30.09.26.pdf, Найм300926.pdf\n\nПродолжить загрузку?';
+  } else if (detectedType !== selectedType) {
+    warning = 'Файл "' + file.name + '" относится к типу "' + detectedType + '",\nа выбран тип "' + selectedType + '".\n\nПродолжить загрузку?';
+  }
+
+  if (warning) {
+    if (!confirm(warning)) {
+      e.target.value = "";
+      return;
+    }
+  }
+
   var statusEl = document.getElementById("parse-status");
   statusEl.textContent = "Читаю файл…";
   document.getElementById("preview-card").style.display = "none";
@@ -160,14 +183,31 @@ function printRoute() {
     });
   };
   var r = lastSentRoute;
-  var items = r.items.map(function(d) {
-    var desc = d.description || "";
-    return "<tr><td class=\"col-num\">№ " + esc(d.number) + "</td><td class=\"col-places\">" + (d.places !== null && d.places !== undefined ? d.places : "—") + "</td><td class=\"col-desc\">" + (desc.length > 0 ? esc(desc) : "—") + "</td></tr>";
-  }).join("");
+
+  var groups = {};
+  r.items.forEach(function(d) {
+    var tc = d.tc || "Без ТК";
+    if (!groups[tc]) groups[tc] = [];
+    groups[tc].push(d);
+  });
+
+  var sortedTCs = Object.keys(groups).sort();
+
+  var itemsHtml = "";
+  sortedTCs.forEach(function(tc) {
+    itemsHtml += "<h2 style='margin-top:20px;background:#e8f4f8;padding:10px;border-left:4px solid #007bff;font-size:14px;'>" + esc(tc) + " (" + groups[tc].length + " отгрузок)</h2>";
+    itemsHtml += "<table style='margin-bottom:16px;'><thead><tr><th style='width:90px;'>Отгрузка</th><th style='width:60px;'>Мест</th><th>Описание</th></tr></thead><tbody>";
+    groups[tc].forEach(function(d) {
+      var desc = d.description || "";
+      itemsHtml += "<tr><td>№ " + esc(d.number) + "</td><td style='text-align:center;'>" + (d.places !== null && d.places !== undefined ? d.places : "—") + "</td><td>" + (desc.length > 0 ? esc(desc) : "—") + "</td></tr>";
+    });
+    itemsHtml += "</tbody></table>";
+  });
+
   var tasks = r.tasks.length ? r.tasks.map(function(t) { return "<li>" + esc(t) + "</li>"; }).join("") : "<li>Нет заданий</li>";
   var w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна."); return; }
-  w.document.write("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Маршрут " + esc(r.label) + "</title><style>@page{margin:10mm;size:A4 landscape}body{font-family:Arial,sans-serif;padding:10px;font-size:11px}h1{font-size:16px;margin:0 0 4px}.meta{color:#555;margin-bottom:12px;font-size:12px}table{border-collapse:collapse;width:100%;margin-bottom:16px}th,td{border:1px solid #999;padding:5px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0;font-weight:700}.col-num{width:90px;white-space:nowrap}.col-places{width:60px;text-align:center}.col-desc{width:auto}h2{font-size:13px;margin:14px 0 6px}ul{margin:0;padding-left:20px}@media print{body{padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}}</style></head><body><h1>Маршрут: " + esc(r.label) + "</h1><div class=\"meta\">Дата: " + esc(r.date) + "</div><h2>Отгрузки (" + r.items.length + ")</h2><table><thead><tr><th>Отгрузка</th><th>Мест</th><th>Описание</th></tr></thead><tbody>" + items + "</tbody></table><h2>Дополнительные задания</h2><ul>" + tasks + "</ul><script>window.onload=function(){window.print();}<\/script></body></html>");
+  w.document.write("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Маршрут " + esc(r.label) + "</title><style>@page{margin:10mm;size:A4 landscape}body{font-family:Arial,sans-serif;padding:10px;font-size:11px}h1{font-size:16px;margin:0 0 4px}.meta{color:#555;margin-bottom:12px;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:5px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0;font-weight:700}h2{font-size:13px;margin:14px 0 6px}ul{margin:0;padding-left:20px}@media print{body{padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}}</style></head><body><h1>Маршрут: " + esc(r.label) + "</h1><div class=\"meta\">Дата: " + esc(r.date) + "</div>" + itemsHtml + "<h2>Дополнительные задания</h2><ul>" + tasks + "</ul><script>window.onload=function(){window.print();}<\/script></body></html>");
   w.document.close();
 }
 
