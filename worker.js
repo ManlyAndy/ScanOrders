@@ -372,7 +372,44 @@ async function handlePhoto(url, auth, env) {
   const number = (url.searchParams.get("number") || "").trim();
   if (!number) return json({ error: "Не передан номер" }, 400);
   if (!(await verifyAuth(auth))) return unauthorized();
-  return json({ photos: [] });
+  
+  if (!env.BITRIX_WEBHOOK_URL) return json({ photos: [] });
+  
+  try {
+    const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+    
+    // Ищем сообщения с фото в чате
+    const messagesRes = await fetch(webhook + "/im.dialog.get", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        DIALOG_ID: BITRIX_DIALOG_ID,
+        LIMIT: 100
+      })
+    });
+    
+    if (!messagesRes.ok) return json({ photos: [] });
+    const messagesData = await messagesRes.json();
+    
+    const photos = [];
+    const messages = messagesData.result || [];
+    
+    // Ищем сообщения с фото для этой отгрузки
+    for (const msg of messages) {
+      if (msg.MESSAGE && msg.MESSAGE.indexOf("Отгрузка №" + number) >= 0 && msg.FILES) {
+        for (const fileId in msg.FILES) {
+          const file = msg.FILES[fileId];
+          if (file && file.filePath) {
+            photos.push(webhook + file.filePath);
+          }
+        }
+      }
+    }
+    
+    return json({ photos: photos });
+  } catch (e) {
+    return json({ photos: [] });
+  }
 }
 
 async function bitrixCall(webhook, method, payload) {
