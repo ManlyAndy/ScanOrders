@@ -381,23 +381,20 @@ function renderReady(data) {
     '</div>';
   loadPhotos(data.name);
 }
+
 async function loadPhotos(number) {
   const photoList = document.getElementById("photo-list");
   if (!photoList) return;
-  
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}`, {
+    const res = await fetch(CONFIG.PROXY_URL + "/photo?number=" + encodeURIComponent(number), {
       headers: { Authorization: getSavedAuth() }
     });
-    
     if (res.status === 401) { logout(); return; }
-    
     const data = await res.json();
-    
     if (data.photos && data.photos.length > 0) {
-      photoList.innerHTML = data.photos.map(url => 
-        `<img src="${url}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid #ddd;" />`
-      ).join("");
+      photoList.innerHTML = data.photos.map(function(photo) {
+        return '<img src="' + CONFIG.PROXY_URL + '/photo/file?id=' + photo.id + '" alt="' + escapeHtml(photo.name) + '" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid #ddd;" />';
+      }).join("");
     } else {
       photoList.innerHTML = '<div class="hint">Фотографий нет</div>';
     }
