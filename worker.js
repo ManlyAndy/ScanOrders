@@ -372,21 +372,76 @@ async function handlePhoto(url, auth, env) {
   const number = (url.searchParams.get("number") || "").trim();
   if (!number) return json({ error: "Не передан номер" }, 400);
   if (!(await verifyAuth(auth))) return unauthorized();
-  
+
   if (!env.BITRIX_WEBHOOK_URL) return json({ photos: [] });
-  
+
   try {
     const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-    
-    // Ищем сообщения с фото в чате
-    const messagesRes = await fetch(webhook + "/im.dialog.get", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const photos = [];
+    let lastId = null;
+    let checked = 0;
+    const maxMessages = 300;
+
+    while (checked < maxMessages) {
+      const params = {
         DIALOG_ID: BITRIX_DIALOG_ID,
-        LIMIT: 100
-      })
-    });
+        LIMIT: 50
+      };
+      if (lastId) params.LAST_ID = lastId;
+
+      const res = await fetch(webhook + "/im.dialog.messages.get", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params)
+      });
+
+      if (!res.ok) break;
+      const data = await res.json();
+      const messages = data.result || [];
+
+      if (messages.length === 0) break;
+
+      for (let i = 0; i < messages.length; i++) {
+        checked++;
+        const msg = messages[i];
+        const text = String(msg.message || "").toLowerCase();
+        const needle = "отгрузка №" + number.toLowerCase();
+
+        if (text.indexOf(needle) >= 0) {
+          const files = msg.files || msg.FILES || {};
+          for (const fileId in files) {
+            if (!files.hasOwnProperty(fileId)) continue;
+            const file = files[fileId];
+            if (!file) continue;
+            const fileUrl = file.showUrl || file.url || file.downloadUrl || "";
+            if (fileUrl) {
+              const fullUrl = fileUrl.indexOf("http") === 0 ? fileUrl : webhook + fileUrl;
+              photos.push(fullUrl);
+            }
+          }
+          const attach = msg.attach || msg.ATTACH || [];
+          if (Array.isArray(attach)) {
+            for (let j = 0; j < attach.length; j++) {
+              const att = attach[j];
+              if (att && att.type === "image" && att.url) {
+                const fullUrl = att.url.indexOf("http") === 0 ? att.url : webhook + att.url;
+                photos.push(fullUrl);
+              }
+            }
+          }
+        }
+        lastId = msg.id;
+      }
+
+      if (messages.length < 50) break;
+    }
+
+    return json({ photos: photos });
+  } catch (e) {
+    console.error("handlePhoto error:", e);
+    return json({ photos: [] });
+  }
+}
     
     if (!messagesRes.ok) return json({ photos: [] });
     const messagesData = await messagesRes.json();
