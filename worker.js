@@ -368,103 +368,102 @@ async function handleRouteComplete(request, auth, env) {
   return json({ ok: true, date: date, label: label, completedAt: completedRoutes[label].completedAt });
 }
 
+const PHOTO_MAX_PAGES = 25;
+
+function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+async function findPhotoFiles(webhook, number) {
+  const esc = escapeRegExp(number);
+  const textRe = new RegExp("Отгрузка\\s*№\\s*" + esc + "(?!\\d)", "i");
+  const nameRe = new RegExp("order-" + esc + "-", "i");
+  const found = new Map();
+  let lastId = 0;
+  for (let page = 0; page < PHOTO_MAX_PAGES; page++) {
+    const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
+    if (lastId) payload.LAST_ID = lastId;
+    const data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
+    const res = data.result || {};
+    const messages = Array.isArray(res.messages) ? res.messages : Object.values(res.messages || {});
+    if (!messages.length) break;
+    const filesArr = Array.isArray(res.files) ? res.files : Object.values(res.files || {});
+    const filesById = {};
+    filesArr.forEach(function(f) { if (f && f.id != null) filesById[String(f.id)] = f; });
+    let matched = 0;
+    let minId = Infinity;
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      const mid = Number(m.id);
+      if (mid < minId) minId = mid;
+      const ids = (m.params && m.params.FILE_ID) ? [].concat(m.params.FILE_ID) : [];
+      if (!ids.length) continue;
+      const textOk = textRe.test(String(m.text || ""));
+      for (let j = 0; j < ids.length; j++) {
+        const fid = String(ids[j]);
+        const f = filesById[fid] || {};
+        const nameOk = nameRe.test(String(f.name || ""));
+        if ((textOk || nameOk) && !found.has(fid)) {
+          found.set(fid, { id: fid, name: f.name || ("photo-" + fid), url: f.urlDownload || f.urlShow || "", mid: mid });
+          matched++;
+        }
+      }
+    }
+    if (found.size && !matched) break;
+    if (!isFinite(minId) || minId === lastId) break;
+    lastId = minId;
+  }
+  return Array.from(found.values()).sort(function(a, b) { return a.mid - b.mid; });
+}
+
 async function handlePhoto(url, auth, env) {
   const number = (url.searchParams.get("number") || "").trim();
   if (!number) return json({ error: "Не передан номер" }, 400);
+  if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "Bitrix не настроен" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
-
-  if (!env.BITRIX_WEBHOOK_URL) return json({ photos: [] });
-
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
   try {
-    const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-    const photos = [];
-    let lastId = null;
-    let checked = 0;
-    const maxMessages = 300;
-
-    while (checked < maxMessages) {
-      const params = {
-        DIALOG_ID: BITRIX_DIALOG_ID,
-        LIMIT: 50
-      };
-      if (lastId) params.LAST_ID = lastId;
-
-      const res = await fetch(webhook + "/im.dialog.messages.get", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(params)
-      });
-
-      if (!res.ok) break;
-      const data = await res.json();
-      const messages = data.result || [];
-
-      if (messages.length === 0) break;
-
-      for (let i = 0; i < messages.length; i++) {
-        checked++;
-        const msg = messages[i];
-        const text = String(msg.message || "").toLowerCase();
-        const needle = "отгрузка №" + number.toLowerCase();
-
-        if (text.indexOf(needle) >= 0) {
-          const files = msg.files || msg.FILES || {};
-          for (const fileId in files) {
-            if (!files.hasOwnProperty(fileId)) continue;
-            const file = files[fileId];
-            if (!file) continue;
-            const fileUrl = file.showUrl || file.url || file.downloadUrl || "";
-            if (fileUrl) {
-              const fullUrl = fileUrl.indexOf("http") === 0 ? fileUrl : webhook + fileUrl;
-              photos.push(fullUrl);
-            }
-          }
-          const attach = msg.attach || msg.ATTACH || [];
-          if (Array.isArray(attach)) {
-            for (let j = 0; j < attach.length; j++) {
-              const att = attach[j];
-              if (att && att.type === "image" && att.url) {
-                const fullUrl = att.url.indexOf("http") === 0 ? att.url : webhook + att.url;
-                photos.push(fullUrl);
-              }
-            }
-          }
-        }
-        lastId = msg.id;
-      }
-
-      if (messages.length < 50) break;
+    const files = await findPhotoFiles(webhook, number);
+    if (env.ROUTES) {
+      await Promise.all(files.map(function(f) {
+        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: 3600 });
+      }));
     }
-
-    return json({ photos: photos });
+    return json({ ok: true, number: number, photos: files.map(function(f) { return { id: f.id, name: f.name }; }) });
   } catch (e) {
-    console.error("handlePhoto error:", e);
-    return json({ photos: [] });
+    return json({ ok: false, error: String((e && e.message) || e) }, 502);
   }
 }
-    
-    if (!messagesRes.ok) return json({ photos: [] });
-    const messagesData = await messagesRes.json();
-    
-    const photos = [];
-    const messages = messagesData.result || [];
-    
-    // Ищем сообщения с фото для этой отгрузки
-    for (const msg of messages) {
-      if (msg.MESSAGE && msg.MESSAGE.indexOf("Отгрузка №" + number) >= 0 && msg.FILES) {
-        for (const fileId in msg.FILES) {
-          const file = msg.FILES[fileId];
-          if (file && file.filePath) {
-            photos.push(webhook + file.filePath);
-          }
-        }
-      }
-    }
-    
-    return json({ photos: photos });
-   catch (e) {
-    return json({ photos: [] });
+
+async function handlePhotoFile(url, auth, env) {
+  const id = (url.searchParams.get("id") || "").trim();
+  if (!/^\d+$/.test(id)) return json({ error: "Неверный id" }, 400);
+  if (!env.BITRIX_WEBHOOK_URL || !env.ROUTES) return json({ error: "Bitrix не настроен" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  const allowed = await env.ROUTES.get("pf:" + id, { type: "json" });
+  if (!allowed) return json({ error: "Файл не найден" }, 404);
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+
+  function isImage(r) {
+    if (!r || !r.ok) return false;
+    return !/text\/html/i.test(r.headers.get("Content-Type") || "");
   }
+
+  let fileRes = null;
+  try {
+    const info = await bitrixCall(webhook, "disk.file.get", { id: id });
+    const dl = info.result && info.result.DOWNLOAD_URL;
+    if (dl) fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
+  } catch (e) { fileRes = null; }
+  if (!isImage(fileRes) && allowed.url) {
+    try { fileRes = await fetch(new URL(allowed.url, webhook).href, { redirect: "follow" }); } catch (e) { fileRes = null; }
+  }
+  if (!isImage(fileRes)) return json({ error: "Не удалось получить файл" }, 502);
+  return new Response(fileRes.body, {
+    status: 200,
+    headers: Object.assign({
+      "Content-Type": fileRes.headers.get("Content-Type") || "image/jpeg",
+      "Cache-Control": "private, max-age=3600"
+    }, corsHeaders())
+  });
 }
 
 async function bitrixCall(webhook, method, payload) {
@@ -546,6 +545,7 @@ export default {
         return await handleRouteComplete(request, auth, env);
       }
       if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
+      if (url.pathname === "/photo/file" && request.method === "GET") return await handlePhotoFile(url, auth, env);
       if (url.pathname === "/photo/upload" && request.method === "POST") return await handlePhotoUpload(request, auth, env);
       if (url.pathname === "/bitrix/test" && request.method === "GET") return await handleBitrixTest(auth, env);
     } catch (e) {
