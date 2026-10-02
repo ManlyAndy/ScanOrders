@@ -408,8 +408,7 @@ async function loadPhotos(number) {
     photoList.innerHTML = '<div class="hint">Не удалось загрузить фото</div>';
   }
 }
-  document.getElementById("result-body").innerHTML = '<div class="card ok"><div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ' + escapeHtml(data.name) + '</div><div class="meta">Покупатель: <b>' + escapeHtml(data.agentName) + '</b></div><div class="meta">Позиций в заказе: <b>' + escapeHtml(String(data.positionsCount)) + '</b></div><div class="meta">Количество мест: <b>' + escapeHtml(String(data.places !== null && data.places !== undefined ? data.places : "—")) + '</b></div><div class="meta">Сумма: <b>' + escapeHtml(String(data.sum)) + ' ₽</b></div>' + (data.tc ? '<div class="meta">ТК: <b>' + escapeHtml(data.tc) + '</b></div>' : '') + statusText + '</div>';
-}
+
 async function finishRoute() {
   if (!currentRoute) return;
   const total = currentRoute.numbers.length;
