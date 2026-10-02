@@ -65,29 +65,18 @@ document.addEventListener("DOMContentLoaded", function() {
 async function handleFile(e) {
   const file = e.target.files[0];
   if (!file) return;
-
   const fileName = file.name ? file.name.replace(/\.[^.]+$/, "").toUpperCase() : "";
   const selectedType = document.getElementById("route-label").value.toUpperCase();
   let detectedType = null;
-
   if (/^МСК\d/i.test(fileName) || /^MSK\d/i.test(fileName)) detectedType = "МСК";
   else if (/^ТК\d/i.test(fileName) || /^TK\d/i.test(fileName)) detectedType = "ТК";
   else if (/^НАЙМ\d/i.test(fileName) || /^HIRE\d/i.test(fileName) || /^NAIM\d/i.test(fileName)) detectedType = "Найм";
-
   let warning = null;
-  if (!detectedType) {
-    warning = 'Файл "' + file.name + '" не соответствует формату имени.\n\nТребуемый формат: МСК30092026.pdf, ТК30.09.26.pdf, Найм300926.pdf\n\nПродолжить загрузку?';
-  } else if (detectedType !== selectedType) {
-    warning = 'Файл "' + file.name + '" относится к типу "' + detectedType + '",\nа выбран тип "' + selectedType + '".\n\nПродолжить загрузку?';
-  }
-
+  if (!detectedType) warning = 'Файл "' + file.name + '" не соответствует формату имени.\n\nТребуемый формат: МСК30092026.pdf, ТК30.09.26.pdf, Найм300926.pdf\n\nПродолжить загрузку?';
+  else if (detectedType !== selectedType) warning = 'Файл "' + file.name + '" относится к типу "' + detectedType + '",\nа выбран тип "' + selectedType + '".\n\nПродолжить загрузку?';
   if (warning) {
-    if (!confirm(warning)) {
-      e.target.value = "";
-      return;
-    }
+    if (!confirm(warning)) { e.target.value = ""; return; }
   }
-
   var statusEl = document.getElementById("parse-status");
   statusEl.textContent = "Читаю файл…";
   document.getElementById("preview-card").style.display = "none";
@@ -126,7 +115,9 @@ function openTaskModal() {
   document.getElementById("task-input").value = routeTasks.join("\n");
   document.getElementById("task-modal").style.display = "flex";
 }
+
 function closeTaskModal() { document.getElementById("task-modal").style.display = "none"; }
+
 function saveTasks() {
   routeTasks = document.getElementById("task-input").value.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean);
   document.getElementById("task-preview").textContent = routeTasks.length ? "Заданий: " + routeTasks.length : "Нет заданий";
@@ -183,16 +174,13 @@ function printRoute() {
     });
   };
   var r = lastSentRoute;
-
   var groups = {};
   r.items.forEach(function(d) {
     var tc = d.tc || "Без ТК";
     if (!groups[tc]) groups[tc] = [];
     groups[tc].push(d);
   });
-
   var sortedTCs = Object.keys(groups).sort();
-
   var itemsHtml = "";
   sortedTCs.forEach(function(tc) {
     itemsHtml += "<h2 style='margin-top:20px;background:#e8f4f8;padding:10px;border-left:4px solid #007bff;font-size:14px;'>" + esc(tc) + " (" + groups[tc].length + " отгрузок)</h2>";
@@ -203,7 +191,6 @@ function printRoute() {
     });
     itemsHtml += "</tbody></table>";
   });
-
   var tasks = r.tasks.length ? r.tasks.map(function(t) { return "<li>" + esc(t) + "</li>"; }).join("") : "<li>Нет заданий</li>";
   var w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна."); return; }
