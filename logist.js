@@ -4,26 +4,14 @@ let parsedNumbers = [];
 let routeTasks = [];
 let lastSentRoute = null;
 
-function getSavedAuth() {
-  const token = localStorage.getItem("sklad_token");
-  return token ? "Bearer " + token : null;
-}
-
-function logout() {
-  localStorage.removeItem("sklad_token");
-  localStorage.removeItem("sklad_user");
-  document.getElementById("screen-login").style.display = "block";
-  document.getElementById("screen-main").style.display = "none";
-}
+function getSavedAuth() { const token = localStorage.getItem("sklad_token"); return token ? "Bearer " + token : null; }
+function logout() { localStorage.removeItem("sklad_token"); localStorage.removeItem("sklad_user"); document.getElementById("screen-login").style.display = "block"; document.getElementById("screen-main").style.display = "none"; }
 
 window.addEventListener("load", function() {
   document.getElementById("route-date").valueAsDate = new Date();
   var historyDateEl = document.getElementById("history-date");
   if (historyDateEl) historyDateEl.valueAsDate = new Date();
-  if (getSavedAuth()) {
-    document.getElementById("screen-login").style.display = "none";
-    document.getElementById("screen-main").style.display = "block";
-  }
+  if (getSavedAuth()) { document.getElementById("screen-login").style.display = "none"; document.getElementById("screen-main").style.display = "block"; }
 });
 
 async function doLogin() {
@@ -36,11 +24,7 @@ async function doLogin() {
   try {
     var controller = new AbortController();
     var tid = setTimeout(function() { controller.abort(); }, 10000);
-    var res = await fetch(CONFIG.PROXY_URL + "/login", {
-      method: "POST",
-      headers: { "Authorization": basicAuth, "Content-Type": "application/json" },
-      signal: controller.signal
-    });
+    var res = await fetch(CONFIG.PROXY_URL + "/login", { method: "POST", headers: { "Authorization": basicAuth, "Content-Type": "application/json" }, signal: controller.signal });
     clearTimeout(tid);
     if (res.status === 401) { errEl.textContent = "Неверный логин или пароль"; return; }
     if (res.status === 403) { errEl.textContent = "У вас нет прав логиста"; return; }
@@ -51,16 +35,10 @@ async function doLogin() {
     localStorage.setItem("sklad_user", data.user || login);
     document.getElementById("screen-login").style.display = "none";
     document.getElementById("screen-main").style.display = "block";
-  } catch (e) {
-    console.error("Ошибка входа:", e);
-    if (e.name === "AbortError") errEl.textContent = "Превышено время ожидания. Проверьте интернет.";
-    else errEl.textContent = "Нет соединения с сервером. Проверьте PROXY_URL в config.js";
-  }
+  } catch (e) { console.error("Ошибка входа:", e); if (e.name === "AbortError") errEl.textContent = "Превышено время ожидания. Проверьте интернет."; else errEl.textContent = "Нет соединения с сервером. Проверьте PROXY_URL в config.js"; }
 }
 
-document.addEventListener("DOMContentLoaded", function() {
-  document.getElementById("pdf-file").addEventListener("change", handleFile);
-});
+document.addEventListener("DOMContentLoaded", function() { document.getElementById("pdf-file").addEventListener("change", handleFile); });
 
 async function handleFile(e) {
   const file = e.target.files[0];
@@ -74,9 +52,7 @@ async function handleFile(e) {
   let warning = null;
   if (!detectedType) warning = 'Файл "' + file.name + '" не соответствует формату имени.\n\nТребуемый формат: МСК30092026.pdf, ТК30.09.26.pdf, Найм300926.pdf\n\nПродолжить загрузку?';
   else if (detectedType !== selectedType) warning = 'Файл "' + file.name + '" относится к типу "' + detectedType + '",\nа выбран тип "' + selectedType + '".\n\nПродолжить загрузку?';
-  if (warning) {
-    if (!confirm(warning)) { e.target.value = ""; return; }
-  }
+  if (warning) { if (!confirm(warning)) { e.target.value = ""; return; } }
   var statusEl = document.getElementById("parse-status");
   statusEl.textContent = "Читаю файл…";
   document.getElementById("preview-card").style.display = "none";
@@ -84,21 +60,14 @@ async function handleFile(e) {
   document.getElementById("task-btn").style.display = "none";
   document.getElementById("print-btn").style.display = "none";
   document.getElementById("task-preview").textContent = "";
-  routeTasks = [];
-  lastSentRoute = null;
-  parsedNumbers = [];
+  routeTasks = []; lastSentRoute = null; parsedNumbers = [];
   try {
     var arrayBuffer = await file.arrayBuffer();
     var pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     var fullText = "";
-    for (var i = 1; i <= pdf.numPages; i++) {
-      var page = await pdf.getPage(i);
-      var content = await page.getTextContent();
-      fullText += content.items.map(function(it) { return it.str; }).join(" ") + "\n";
-    }
+    for (var i = 1; i <= pdf.numPages; i++) { var page = await pdf.getPage(i); var content = await page.getTextContent(); fullText += content.items.map(function(it) { return it.str; }).join(" ") + "\n"; }
     var regex = /(\d{4,7})\s+(?:Да|Нет)\s+\d{2}\.\d{2}\.\d{4}/g;
-    var found = new Set();
-    var m;
+    var found = new Set(); var m;
     while ((m = regex.exec(fullText)) !== null) found.add(m[1]);
     parsedNumbers = Array.from(found);
     if (!parsedNumbers.length) { statusEl.innerHTML = "Не удалось найти номера отгрузок."; return; }
@@ -111,18 +80,9 @@ async function handleFile(e) {
   } catch (e) { statusEl.innerHTML = "Не удалось прочитать PDF."; }
 }
 
-function openTaskModal() {
-  document.getElementById("task-input").value = routeTasks.join("\n");
-  document.getElementById("task-modal").style.display = "flex";
-}
-
+function openTaskModal() { document.getElementById("task-input").value = routeTasks.join("\n"); document.getElementById("task-modal").style.display = "flex"; }
 function closeTaskModal() { document.getElementById("task-modal").style.display = "none"; }
-
-function saveTasks() {
-  routeTasks = document.getElementById("task-input").value.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean);
-  document.getElementById("task-preview").textContent = routeTasks.length ? "Заданий: " + routeTasks.length : "Нет заданий";
-  closeTaskModal();
-}
+function saveTasks() { routeTasks = document.getElementById("task-input").value.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean); document.getElementById("task-preview").textContent = routeTasks.length ? "Заданий: " + routeTasks.length : "Нет заданий"; closeTaskModal(); }
 
 async function sendRoute() {
   var date = document.getElementById("route-date").value;
@@ -133,62 +93,33 @@ async function sendRoute() {
   try {
     var controller = new AbortController();
     var tid = setTimeout(function() { controller.abort(); }, 30000);
-    var resDetails = await fetch(CONFIG.PROXY_URL + "/route/details", {
-      method: "POST",
-      headers: { "Authorization": getSavedAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({ numbers: parsedNumbers }),
-      signal: controller.signal
-    });
+    var resDetails = await fetch(CONFIG.PROXY_URL + "/route/details", { method: "POST", headers: { "Authorization": getSavedAuth(), "Content-Type": "application/json" }, body: JSON.stringify({ numbers: parsedNumbers }), signal: controller.signal });
     clearTimeout(tid);
     if (resDetails.status === 401) { logout(); return; }
     if (!resDetails.ok) throw new Error("Ошибка получения данных");
     var detailsData = await resDetails.json();
     var enrichedItems = detailsData.details || [];
     resultEl.textContent = "Шаг 2/2: Сохраняю маршрут...";
-    var resRoute = await fetch(CONFIG.PROXY_URL + "/route", {
-      method: "POST",
-      headers: { "Authorization": getSavedAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({ date: date, label: label, numbers: parsedNumbers, tasks: routeTasks })
-    });
+    var resRoute = await fetch(CONFIG.PROXY_URL + "/route", { method: "POST", headers: { "Authorization": getSavedAuth(), "Content-Type": "application/json" }, body: JSON.stringify({ date: date, label: label, numbers: parsedNumbers, tasks: routeTasks }) });
     if (resRoute.status === 401) { logout(); return; }
     var routeData = await resRoute.json();
-    if (routeData.ok) {
-      lastSentRoute = { date: date, label: label, items: enrichedItems, tasks: routeTasks.slice() };
-      document.getElementById("print-btn").style.display = "inline-block";
-      resultEl.innerHTML = "<span style=\"color:green;\">Готово! Отгрузок: " + routeData.count + ".</span>";
-    } else {
-      resultEl.innerHTML = "<span class=\"error\">" + (routeData.error || "Ошибка") + "</span>";
-    }
-  } catch (e) {
-    console.error(e);
-    if (e.name === "AbortError") resultEl.innerHTML = "<span class=\"error\">Таймаут (30 сек). Проверьте интернет.</span>";
-    else resultEl.innerHTML = "<span class=\"error\">Ошибка соединения.</span>";
-  }
+    if (routeData.ok) { lastSentRoute = { date: date, label: label, items: enrichedItems, tasks: routeTasks.slice() }; document.getElementById("print-btn").style.display = "inline-block"; resultEl.innerHTML = "<span style=\"color:green;\">Готово! Отгрузок: " + routeData.count + ".</span>"; }
+    else { resultEl.innerHTML = "<span class=\"error\">" + (routeData.error || "Ошибка") + "</span>"; }
+  } catch (e) { console.error(e); if (e.name === "AbortError") resultEl.innerHTML = "<span class=\"error\">Таймаут (30 сек). Проверьте интернет.</span>"; else resultEl.innerHTML = "<span class=\"error\">Ошибка соединения.</span>"; }
 }
 
 function printRoute() {
   if (!lastSentRoute) return;
-  var esc = function(v) {
-    return String(v || "").replace(/[&<>"']/g, function(c) {
-      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
-    });
-  };
+  var esc = function(v) { return String(v || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); };
   var r = lastSentRoute;
   var groups = {};
-  r.items.forEach(function(d) {
-    var tc = d.tc || "Без ТК";
-    if (!groups[tc]) groups[tc] = [];
-    groups[tc].push(d);
-  });
+  r.items.forEach(function(d) { var tc = d.tc || "Без ТК"; if (!groups[tc]) groups[tc] = []; groups[tc].push(d); });
   var sortedTCs = Object.keys(groups).sort();
   var itemsHtml = "";
   sortedTCs.forEach(function(tc) {
     itemsHtml += "<h2 style='margin-top:20px;background:#e8f4f8;padding:10px;border-left:4px solid #007bff;font-size:14px;'>" + esc(tc) + " (" + groups[tc].length + " отгрузок)</h2>";
     itemsHtml += "<table style='margin-bottom:16px;'><thead><tr><th style='width:90px;'>Отгрузка</th><th style='width:60px;'>Мест</th><th>Описание</th></tr></thead><tbody>";
-    groups[tc].forEach(function(d) {
-      var desc = d.description || "";
-      itemsHtml += "<tr><td>№ " + esc(d.number) + "</td><td style='text-align:center;'>" + (d.places !== null && d.places !== undefined ? d.places : "—") + "</td><td>" + (desc.length > 0 ? esc(desc) : "—") + "</td></tr>";
-    });
+    groups[tc].forEach(function(d) { var desc = d.description || ""; itemsHtml += "<tr><td>№ " + esc(d.number) + "</td><td style='text-align:center;'>" + (d.places !== null && d.places !== undefined ? d.places : "—") + "</td><td>" + (desc.length > 0 ? esc(desc) : "—") + "</td></tr>"; });
     itemsHtml += "</tbody></table>";
   });
   var tasks = r.tasks.length ? r.tasks.map(function(t) { return "<li>" + esc(t) + "</li>"; }).join("") : "<li>Нет заданий</li>";
@@ -209,10 +140,7 @@ async function showHistoryForDate() {
     var data = await res.json();
     if (!data.found) { listEl.innerHTML = "<div class=\"hint\">На " + date + " маршрутов нет</div>"; return; }
     var labels = {};
-    (data.items || []).forEach(function(it) {
-      if (!labels[it.label]) labels[it.label] = [];
-      labels[it.label].push(it.number);
-    });
+    (data.items || []).forEach(function(it) { if (!labels[it.label]) labels[it.label] = []; labels[it.label].push(it.number); });
     var tasksByLabel = data.tasksByLabel || {};
     var completedRoutes = data.completedRoutes || {};
     var html = "<div style=\"margin-bottom:12px;\"><strong>Маршрут на " + date + "</strong></div>";
@@ -226,17 +154,10 @@ async function showHistoryForDate() {
       html += "</div><div class=\"history-labels\">";
       if (scannedSet) {
         html += "<div style=\"display:flex;flex-wrap:wrap;gap:6px;\">";
-        numbers.forEach(function(num) {
-          var wasScanned = scannedSet.has(num);
-          html += "<div style=\"display:inline-flex;align-items:center;background:#f9f9f9;padding:4px 8px;border-radius:6px;\"><span>№" + num + "</span><span class=\"status-badge " + (wasScanned ? "status-shipped" : "status-other") + "\">" + (wasScanned ? "✓" : "—") + "</span></div>";
-        });
+        numbers.forEach(function(num) { var wasScanned = scannedSet.has(num); html += "<div style=\"display:inline-flex;align-items:center;background:#f9f9f9;padding:4px 8px;border-radius:6px;\"><span>№" + num + "</span><span class=\"status-badge " + (wasScanned ? "status-shipped" : "status-other") + "\">" + (wasScanned ? "✓" : "—") + "</span></div>"; });
         html += "</div>";
-      } else {
-        html += numbers.map(function(n) { return "№" + n; }).join(", ");
-      }
-      if (tasksByLabel[label] && tasksByLabel[label].length) {
-        html += "<div style=\"margin-top:8px;font-size:0.9em;color:#555;\"><strong>Задания:</strong> " + tasksByLabel[label].join("; ") + "</div>";
-      }
+      } else { html += numbers.map(function(n) { return "№" + n; }).join(", "); }
+      if (tasksByLabel[label] && tasksByLabel[label].length) { html += "<div style=\"margin-top:8px;font-size:0.9em;color:#555;\"><strong>Задания:</strong> " + tasksByLabel[label].join("; ") + "</div>"; }
       html += "</div></div>";
     }
     listEl.innerHTML = html;
