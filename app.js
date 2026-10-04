@@ -1,6 +1,3 @@
-// ===========================================================
-// Логика приложения. Настройки — в config.js
-// ===========================================================
 let html5QrCode = null;
 let currentResult = null;
 let currentRoute = null;
@@ -27,7 +24,7 @@ function loadRouteFromStorage() {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw);
-    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []) };
+    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {} };
   } catch (e) {
     return null;
   }
@@ -42,6 +39,7 @@ function saveRouteToStorage() {
       numbers: currentRoute.numbers,
       tasks: currentRoute.tasks || [],
       scanned: Array.from(currentRoute.scanned),
+      tcMap: currentRoute.tcMap || {}
     })
   );
 }
@@ -50,16 +48,14 @@ function renderRouteStatus() {
   const clearBtn = document.getElementById("clear-route-btn");
   const listBtn = document.getElementById("show-list-btn");
   const finishBtn = document.getElementById("finish-route-btn");
-  
   if (!currentRoute) {
-    el.textContent = `Маршрут "${selectedRouteType}" не загружен — сканирование только по статусу`;
+    el.textContent = "Маршрут \"" + selectedRouteType + "\" не загружен — сканирование только по статусу";
     clearBtn.style.display = "none";
     listBtn.style.display = "none";
     if (finishBtn) finishBtn.style.display = "none";
     return;
   }
-  
-  el.textContent = `Маршрут "${currentRoute.type}" на ${currentRoute.date}: отсканировано ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+  el.textContent = "Маршрут \"" + currentRoute.type + "\" на " + currentRoute.date + ": отсканировано " + currentRoute.scanned.size + " из " + currentRoute.numbers.length;
   clearBtn.style.display = "inline-block";
   listBtn.style.display = "block";
   if (finishBtn) finishBtn.style.display = "block";
@@ -67,8 +63,7 @@ function renderRouteStatus() {
 }
 function openRouteModal() {
   if (!currentRoute) return;
-  document.getElementById("modal-title").textContent =
-    `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
+  document.getElementById("modal-title").textContent = "Маршрут \"" + currentRoute.type + "\" — " + currentRoute.scanned.size + " из " + currentRoute.numbers.length;
   renderModalList();
   document.getElementById("route-modal").classList.add("active");
 }
@@ -78,31 +73,43 @@ function closeRouteModal() {
 function renderModalList() {
   if (!currentRoute) return;
   const listEl = document.getElementById("modal-list");
-  const sorted = [...currentRoute.numbers].sort((a, b) => {
+  const tcMap = currentRoute.tcMap || {};
+
+  const sorted = [...currentRoute.numbers].sort(function(a, b) {
+    const tcA = tcMap[a] || "";
+    const tcB = tcMap[b] || "";
+    if (tcA !== tcB) return tcA.localeCompare(tcB);
     const aScanned = currentRoute.scanned.has(a);
     const bScanned = currentRoute.scanned.has(b);
     if (aScanned === bScanned) return a.localeCompare(b, undefined, { numeric: true });
     return aScanned ? 1 : -1;
   });
-  listEl.innerHTML = sorted
-    .map((num) => {
-      const scanned = currentRoute.scanned.has(num);
-      return `<div class="modal-row ${scanned ? "scanned" : ""}">
-        <span>№ ${escapeHtml(num)}</span>
-        <span class="check">${scanned ? "✓" : ""}</span>
-      </div>`;
-    })
-    .join("");
+
+  listEl.innerHTML = sorted.map(function(num) {
+    const scanned = currentRoute.scanned.has(num);
+    const tc = tcMap[num] || "";
+    return '<div class="modal-row ' + (scanned ? "scanned" : "") + '" onclick="openShipmentFromList(\'' + num + '\')" style="cursor:pointer;">' +
+      '<span>№ ' + escapeHtml(num) + (tc ? ' - ' + escapeHtml(tc) : '') + ' - ></span>' +
+      '<span class="check">' + (scanned ? "✓" : "") + '</span>' +
+      '</div>';
+  }).join("");
+
   if (currentRoute.tasks && currentRoute.tasks.length) {
-    listEl.innerHTML += `<div style="margin-top:14px;font-weight:700;">Доп. задания</div>` +
-      currentRoute.tasks.map(t => `<div class="modal-row"><span>ℹ️ ${escapeHtml(t)}</span></div>`).join("");
+    listEl.innerHTML += '<div style="margin-top:14px;font-weight:700;">Доп. задания</div>' +
+      currentRoute.tasks.map(function(t) { return '<div class="modal-row"><span>ℹ️ ' + escapeHtml(t) + '</span></div>'; }).join("");
   }
+  const titleEl = document.getElementById("modal-title");
+  if (titleEl) titleEl.textContent = "Маршрут \"" + currentRoute.type + "\" — " + currentRoute.scanned.size + " из " + currentRoute.numbers.length;
+}
+function openShipmentFromList(num) {
+  closeRouteModal();
+  lookupCode(num);
 }
 async function loadRoute() {
   const el = document.getElementById("route-status");
   el.textContent = "Загружаю маршрут…";
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${todayStr()}`, {
+    const res = await fetch(CONFIG.PROXY_URL + "/route?date=" + todayStr(), {
       headers: { Authorization: getSavedAuth() },
     });
     if (res.status === 401) { logout(); return; }
@@ -112,10 +119,10 @@ async function loadRoute() {
       return;
     }
     const filteredNumbers = (data.items || [])
-      .filter((it) => it.label === selectedRouteType)
-      .map((it) => it.number);
+      .filter(function(it) { return it.label === selectedRouteType; })
+      .map(function(it) { return it.number; });
     if (!filteredNumbers.length) {
-      el.textContent = `На сегодня нет загруженного маршрута типа "${selectedRouteType}"`;
+      el.textContent = "На сегодня нет загруженного маршрута типа \"" + selectedRouteType + "\"";
       return;
     }
     currentRoute = {
@@ -123,9 +130,29 @@ async function loadRoute() {
       type: selectedRouteType,
       numbers: filteredNumbers,
       tasks: (data.tasksByLabel && data.tasksByLabel[selectedRouteType]) || [],
-      scanned: new Set()
+      scanned: new Set(),
+      tcMap: {}
     };
     saveRouteToStorage();
+
+    el.textContent = "Загружаю данные о ТК…";
+    try {
+      const detailsRes = await fetch(CONFIG.PROXY_URL + "/route/details", {
+        method: "POST",
+        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+        body: JSON.stringify({ numbers: filteredNumbers })
+      });
+      if (detailsRes.ok) {
+        const detailsData = await detailsRes.json();
+        (detailsData.details || []).forEach(function(d) {
+          if (d.tc) currentRoute.tcMap[d.number] = d.tc;
+        });
+        saveRouteToStorage();
+      }
+    } catch (e) {
+      // ТК не загрузились — продолжим без них
+    }
+
     renderRouteStatus();
   } catch (e) {
     el.textContent = "Не удалось загрузить маршрут — проверьте интернет";
@@ -133,10 +160,7 @@ async function loadRoute() {
 }
 function clearRoute() {
   if (!currentRoute) return;
-  const ok = confirm(
-    `Сбросить список "${currentRoute.type}" на этом телефоне?\n\n` +
-    `Это НЕ меняет статусы в МойСклад — только очищает список на устройстве.`
-  );
+  const ok = confirm("Сбросить список \"" + currentRoute.type + "\" на этом телефоне?\n\nЭто НЕ меняет статусы в МойСклад — только очищает список на устройстве.");
   if (!ok) return;
   localStorage.removeItem(routeStorageKey(currentRoute.type));
   currentRoute = null;
@@ -151,14 +175,13 @@ function screens() {
 }
 function show(name) {
   const s = screens();
-  Object.values(s).forEach((el) => el.classList.remove("active"));
+  Object.values(s).forEach(function(el) { el.classList.remove("active"); });
   s[name].classList.add("active");
 }
 
-// ---------- ВХОД ----------
 function getSavedAuth() {
   const token = localStorage.getItem("sklad_token");
-  return token ? `Bearer ${token}` : null;
+  return token ? "Bearer " + token : null;
 }
 function getSavedUser() {
   return localStorage.getItem("sklad_user") || "";
@@ -168,42 +191,25 @@ async function doLogin() {
   const pass = document.getElementById("login-pass").value;
   const errEl = document.getElementById("login-error");
   errEl.textContent = "";
-
   if (!login || !pass) {
     errEl.textContent = "Заполните логин и пароль";
     return;
   }
-
   const basicAuth = "Basic " + btoa(unescape(encodeURIComponent(login + ":" + pass)));
-
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/login`, {
+    const controller = new AbortController();
+    const tid = setTimeout(function() { controller.abort(); }, 10000);
+    const res = await fetch(CONFIG.PROXY_URL + "/login", {
       method: "POST",
-      headers: {
-        "Authorization": basicAuth,
-        "Content-Type": "application/json"
-      },
+      headers: { "Authorization": basicAuth, "Content-Type": "application/json" },
+      signal: controller.signal
     });
-
-    if (res.status === 401) {
-      errEl.textContent = "Неверный логин или пароль";
-      return;
-    }
-    if (res.status === 403) {
-      errEl.textContent = "Доступ к приложению запрещён";
-      return;
-    }
-    if (!res.ok) {
-      errEl.textContent = "Не удалось связаться с сервером";
-      return;
-    }
-
-  const data = await res.json();
-    if (!data.ok || !data.token) {
-      errEl.textContent = data.error || "Сервер не вернул токен";
-      return;
-    }
-
+    clearTimeout(tid);
+    if (res.status === 401) { errEl.textContent = "Неверный логин или пароль"; return; }
+    if (res.status === 403) { errEl.textContent = "Доступ к приложению запрещён"; return; }
+    if (!res.ok) { errEl.textContent = "Не удалось связаться с сервером"; return; }
+    const data = await res.json();
+    if (!data.ok || !data.token) { errEl.textContent = data.error || "Сервер не вернул токен"; return; }
     localStorage.setItem("sklad_token", data.token);
     localStorage.setItem("sklad_user", data.user || login);
     enterScanScreen();
@@ -225,41 +231,36 @@ function enterScanScreen() {
   setTimeout(startScanner, 300);
 }
 
-// ---------- СКАНЕР ----------
 function startScanner() {
-  if (isScannerActive) return; // Сканер уже работает
-  
+  if (isScannerActive) return;
   const readerEl = document.getElementById("reader");
   readerEl.innerHTML = "";
   html5QrCode = new Html5Qrcode("reader");
-  
   Html5Qrcode.getCameras()
-    .then((cameras) => {
+    .then(function(cameras) {
       if (!cameras || !cameras.length) {
         showCameraError(readerEl, "Камера не найдена");
         return;
       }
-      const backCam = cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[0];
+      const backCam = cameras.find(function(c) { return /back|rear|environment/i.test(c.label); }) || cameras[0];
       html5QrCode
         .start(
           backCam.id,
           { fps: 10, qrbox: { width: 220, height: 120 } },
-          (decodedText) => onScanSuccess(decodedText),
-          () => {}
+          function(decodedText) { onScanSuccess(decodedText); },
+          function() {}
         )
-        .then(() => {
-          isScannerActive = true;
-        })
-        .catch(() => {
+        .then(function() { isScannerActive = true; })
+        .catch(function() {
           showCameraError(readerEl, "Не удалось запустить камеру. Разрешите доступ к камере в браузере.");
         });
     })
-    .catch(() => {
+    .catch(function() {
       showCameraError(readerEl, "Нет доступа к камере");
     });
 }
 function showCameraError(readerEl, message) {
-  readerEl.innerHTML = `<p class="error">${escapeHtml(message)}</p> <button class="btn-secondary" onclick="retryCamera()">Попробовать снова</button>`;
+  readerEl.innerHTML = '<p class="error">' + escapeHtml(message) + '</p> <button class="btn-secondary" onclick="retryCamera()">Попробовать снова</button>';
 }
 function retryCamera() {
   stopScanner();
@@ -270,7 +271,7 @@ function stopScanner() {
     try {
       const result = html5QrCode.stop();
       if (result && typeof result.catch === "function") {
-        result.catch(() => {});
+        result.catch(function() {});
       }
     } catch (e) {}
     html5QrCode = null;
@@ -278,10 +279,8 @@ function stopScanner() {
   }
 }
 function onScanSuccess(decodedText) {
-  // Игнорируем сканирования, если показан экран результата
   const resultScreen = document.getElementById("screen-result");
   if (resultScreen.classList.contains("active")) return;
-  
   lookupCode(decodedText.trim());
 }
 function showManualInput() {
@@ -297,16 +296,16 @@ function backToScan() {
   document.getElementById("manual-input").value = "";
   show("scan");
 }
-// ---------- ПОИСК И ОТОБРАЖЕНИЕ ----------
+
 async function lookupCode(code) {
   show("result");
   const body = document.getElementById("result-body");
   body.innerHTML = '<div class="spinner"></div><p class="hint">Ищу отгрузку ' + escapeHtml(code) + '…</p>';
   const auth = getSavedAuth();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(function() { controller.abort(); }, 15000);
   try {
-    const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(code)}`, {
+    const res = await fetch(CONFIG.PROXY_URL + "/find?code=" + encodeURIComponent(code), {
       headers: { Authorization: auth },
       signal: controller.signal,
     });
@@ -318,21 +317,20 @@ async function lookupCode(code) {
       return;
     }
     currentResult = data;
-    
-    // Если отгрузка из маршрута - сразу отмечаем её как отсканированную
-    if (currentRoute && currentRoute.numbers.includes(data.name)) {
+
+    if (currentRoute && currentRoute.numbers.indexOf(data.name) >= 0) {
       if (!currentRoute.scanned.has(data.name)) {
         currentRoute.scanned.add(data.name);
         saveRouteToStorage();
         renderRouteStatus();
       }
     }
-    
+
     if (data.alreadyShipped) {
       renderAlreadyShipped(data);
     } else if (!data.ready) {
       renderWrongStatus(data);
-    } else if (currentRoute && !currentRoute.numbers.includes(data.name)) {
+    } else if (currentRoute && currentRoute.numbers.indexOf(data.name) < 0) {
       renderNotInRoute(data);
     } else {
       renderReady(data);
@@ -347,50 +345,26 @@ async function lookupCode(code) {
   }
 }
 function renderNotFound(code) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad">
-    <div class="badge bad">НЕ НАЙДЕНО</div>
-    <div class="num">№ ${escapeHtml(code)}</div>
-    <p class="meta">Отгрузка с таким номером не найдена.</p>
-  </div>`;
+  document.getElementById("result-body").innerHTML = '<div class="card bad"><div class="badge bad">НЕ НАЙДЕНО</div><div class="num">№ ' + escapeHtml(code) + '</div><p class="meta">Отгрузка с таким номером не найдена.</p></div>';
 }
 function renderWrongStatus(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad">
-    <div class="badge bad">НЕ ГОТОВО К ОТГРУЗКЕ</div>
-    <div class="num">№ ${escapeHtml(data.name)}</div>
-    <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-    <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-    <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
-  </div>`;
+  document.getElementById("result-body").innerHTML = '<div class="card bad"><div class="badge bad">НЕ ГОТОВО К ОТГРУЗКЕ</div><div class="num">№ ' + escapeHtml(data.name) + '</div><div class="meta">Покупатель: <b>' + escapeHtml(data.agentName) + '</b></div><div class="meta">Текущий статус: <b>' + escapeHtml(data.stateName || "—") + '</b></div><p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p></div>';
 }
 function renderAlreadyShipped(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad">
-    <div class="badge bad">УЖЕ ОТГРУЖЕНО</div>
-    <div class="num">№ ${escapeHtml(data.name)}</div>
-    <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-    <p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p>
-  </div>`;
+  document.getElementById("result-body").innerHTML = '<div class="card bad"><div class="badge bad">УЖЕ ОТГРУЖЕНО</div><div class="num">№ ' + escapeHtml(data.name) + '</div><div class="meta">Покупатель: <b>' + escapeHtml(data.agentName) + '</b></div><p class="meta">Этот заказ уже был отсканирован и отгружен ранее.</p></div>';
 }
 function renderNotInRoute(data) {
-  document.getElementById("result-body").innerHTML = `<div class="card bad">
-    <div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div>
-    <div class="num">№ ${escapeHtml(data.name)}</div>
-    <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>
-    <p class="meta">Заказ собран, но его нет в маршруте "${escapeHtml(currentRoute.type)}".</p>
-  </div>`;
+  document.getElementById("result-body").innerHTML = '<div class="card bad"><div class="badge bad">НЕ В ЭТОМ МАРШРУТЕ</div><div class="num">№ ' + escapeHtml(data.name) + '</div><div class="meta">Покупатель: <b>' + escapeHtml(data.agentName) + '</b></div><p class="meta">Заказ собран, но его нет в маршруте "' + escapeHtml(currentRoute.type) + '".</p></div>';
 }
 function renderReady(data) {
   const inRoute = currentRoute && currentRoute.numbers.includes(data.name);
   const wasScanned = inRoute && currentRoute.scanned.has(data.name);
-  
+
   let statusText = '';
   if (inRoute) {
-    if (wasScanned) {
-      statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
-    } else {
-      statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
-    }
+    statusText = '<div class="meta" style="color:#2ecc71;font-weight:600;">✓ Отмечена в маршруте</div>';
   }
-  
+
   document.getElementById("result-body").innerHTML = `<div class="card ok">
     <div class="badge ok">ГОТОВО К ОТГРУЗКЕ</div>
     <div class="num">№ ${escapeHtml(data.name)}</div>
@@ -399,45 +373,94 @@ function renderReady(data) {
     <div class="meta">Количество мест: <b>${escapeHtml(String(data.places ?? "—"))}</b></div>
     <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
     ${statusText}
+  </div>
+  <div id="photo-section" style="margin-top:16px;">
+    <h3 style="margin:0 0 8px;">Фотографии отгрузки</h3>
+    <div id="photo-list" style="display:flex;flex-wrap:wrap;gap:8px;">
+      <div class="hint">Загрузка фото...</div>
+    </div>
   </div>`;
+  
+  // Загружаем фото после отображения карточки
+  loadPhotos(data.name);
 }
-function escapeHtml(str) {
-  const d = document.createElement("div");
-  d.textContent = str;
-  return d.innerHTML;
-}
+async function loadPhotos(number) {
+  const photoList = document.getElementById("photo-list");
+  if (!photoList) return;
+  
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(number)}`, {
+      headers: { Authorization: getSavedAuth() }
+    });
+    
+    if (res.status === 401) { logout(); return; }
+    
+    const data = await res.json();
+    
+    if (!res.ok || data.ok === false) {
+      photoList.innerHTML = '<div class="hint">Не удалось получить список фото</div>';
+      return;
+    }
 
-// ---------- ЗАКРЫТИЕ МАРШРУТА ----------
+    const photos = Array.isArray(data.photos) ? data.photos : [];
+    if (!photos.length) {
+      photoList.innerHTML = '<div class="hint">Фотографий нет</div>';
+      return;
+    }
+
+    photoList.innerHTML = '<div class="hint">Загружаю изображения…</div>';
+    const images = await Promise.all(photos.map(async function(photo) {
+      const id = photo && typeof photo === "object" ? String(photo.id || "") : "";
+      if (!/^\d+$/.test(id)) return null;
+      const fileRes = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(id)}`, {
+        headers: { Authorization: getSavedAuth() }
+      });
+      if (fileRes.status === 401) { logout(); return null; }
+      if (!fileRes.ok) return null;
+      const blob = await fileRes.blob();
+      if (!blob.type.startsWith("image/")) return null;
+      return { src: URL.createObjectURL(blob), name: String(photo.name || "Фото") };
+    }));
+    const visible = images.filter(Boolean);
+    if (!visible.length) {
+      photoList.innerHTML = '<div class="hint">Фото найдены, но изображения не удалось загрузить</div>';
+      return;
+    }
+    photoList.innerHTML = visible.map(function(img) {
+      return `<img src="${img.src}" alt="${escapeHtml(img.name)}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid #ddd;object-fit:contain;" />`;
+    }).join("");
+  } catch (e) {
+    photoList.innerHTML = '<div class="hint">Не удалось загрузить фото</div>';
+  }
+}
 async function finishRoute() {
   if (!currentRoute) return;
-  
   const total = currentRoute.numbers.length;
   const scanned = currentRoute.scanned.size;
   const notScanned = total - scanned;
-  
-  let message = `Закрыть маршрут "${currentRoute.type}" на ${currentRoute.date}?\n\n`;
-  message += `Отсканировано: ${scanned} из ${total}\n`;
-  
+
+  let message = "Закрыть маршрут \"" + currentRoute.type + "\" на " + currentRoute.date + "?\n\n";
+  message += "Отсканировано: " + scanned + " из " + total + "\n";
   if (notScanned > 0) {
-    message += `Не отсканировано: ${notScanned}\n\n`;
-    message += `Все отсканированные будут переведены в статус "Отгружено".\n`;
-    message += `Неотсканированные останутся в статусе "Собрано".`;
+    message += "Не отсканировано: " + notScanned + "\n\n";
+    message += "Все отсканированные будут переведены в статус \"Отгружено\".\n";
+    message += "Неотсканированные останутся в статусе \"Собрано\".";
   } else {
-    message += `Все отгрузки будут переведены в статус "Отгружено".`;
+    message += "Все отгрузки будут переведены в статус \"Отгружено\".";
   }
-  
+
   if (!confirm(message)) return;
-  
+
   const btn = document.getElementById("finish-route-btn");
   const originalText = btn.textContent;
   btn.textContent = "Закрываю…";
   btn.disabled = true;
-  
+
   try {
     const idsToShip = [];
     for (const num of currentRoute.scanned) {
       try {
-        const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
+        const res = await fetch(CONFIG.PROXY_URL + "/find?code=" + encodeURIComponent(num), {
           headers: { Authorization: getSavedAuth() }
         });
         if (res.status === 401) { logout(); return; }
@@ -449,17 +472,17 @@ async function finishRoute() {
         }
       } catch {}
     }
-    
+
     if (idsToShip.length) {
-      const finishRes = await fetch(`${CONFIG.PROXY_URL}/finish`, {
+      const finishRes = await fetch(CONFIG.PROXY_URL + "/finish", {
         method: "POST",
         headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
         body: JSON.stringify({ ids: idsToShip })
       });
       if (finishRes.status === 401) { logout(); return; }
     }
-    
-    const completeRes = await fetch(`${CONFIG.PROXY_URL}/route/complete`, {
+
+    const completeRes = await fetch(CONFIG.PROXY_URL + "/route/complete", {
       method: "POST",
       headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -468,16 +491,16 @@ async function finishRoute() {
         scanned: Array.from(currentRoute.scanned)
       })
     });
-    
+
     if (completeRes.status === 401) { logout(); return; }
     const completeData = await completeRes.json();
-    
+
     if (completeData.ok) {
-      alert(`Маршрут "${currentRoute.type}" закрыт.\n\nОтсканировано: ${scanned} из ${total}`);
+      alert("Маршрут \"" + currentRoute.type + "\" закрыт.\n\nОтсканировано: " + scanned + " из " + total);
       localStorage.removeItem(routeStorageKey(currentRoute.type));
       currentRoute = null;
       renderRouteStatus();
-       } else {
+    } else {
       alert("Не удалось сохранить информацию о закрытии маршрута");
     }
   } catch (e) {
@@ -487,11 +510,15 @@ async function finishRoute() {
     btn.disabled = false;
   }
 }
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str;
+  return d.innerHTML;
+}
 
-// ---------- СТАРТ ----------
-window.addEventListener("load", () => {
+window.addEventListener("load", function() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js").catch(function() {});
   }
   if (getSavedAuth()) {
     enterScanScreen();
