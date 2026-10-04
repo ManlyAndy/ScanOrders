@@ -7,14 +7,10 @@ const BITRIX_DIALOG_ID = `chat${BITRIX_CHAT_ID}`;
 const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 const SESSION_TTL = 28800;
 const ROUTE_TTL = 15552000;
+const PHOTO_MAX_PAGES = 25;
 
-const ALLOWED_MS_LOGINS = new Set([
-  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
-].map(v => v.trim().toLowerCase()).filter(Boolean));
-
-const ALLOWED_ROUTE_LOGINS = new Set([
-  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
-].map(v => v.trim().toLowerCase()).filter(Boolean));
+const ALLOWED_MS_LOGINS = new Set(["kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"]);
+const ALLOWED_ROUTE_LOGINS = new Set(["kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"]);
 
 function corsHeaders() {
   return {
@@ -105,7 +101,6 @@ async function handleLogin(request, env) {
   if (auth.indexOf("Basic ") !== 0) return unauthorized();
   const username = getBasicUsername(auth);
   if (!isAllowedLogin(username)) return json({ error: "Доступ запрещён" }, 403);
-
   let goodAuth = null;
   let lastStatus = 401;
   const variants = buildAuthVariants(auth);
@@ -145,6 +140,29 @@ function extractPlaces(row) {
   return value;
 }
 
+function extractTCFromDescription(desc) {
+  if (!desc) return "";
+  const text = desc.replace(/[«»""'']/g, '"');
+  const lines = text.split(/\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.indexOf("ТК ") === 0) {
+      let tc = line.substring(3).trim();
+      tc = tc.replace(/^["']|["']$/g, '');
+      const words = tc.split(/\s+/);
+      const stopWords = ['до', 'в', 'по', 'на', 'от', 'для', 'терминала', 'терминалу', 'г.', 'г', 'получатель', 'плательщик', 'адрес', 'наб.', 'д.', 'корп.', 'кв.', 'тел.'];
+      const result = [];
+      for (let j = 0; j < words.length; j++) {
+        const cleanWord = words[j].replace(/["',.]/g, '');
+        if (stopWords.indexOf(cleanWord.toLowerCase()) >= 0) break;
+        if (cleanWord) result.push(cleanWord);
+      }
+      return result.slice(0, 3).join(' ');
+    }
+  }
+  return "";
+}
+
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
   if (!code) return json({ error: "Не передан номер" }, 400);
@@ -158,7 +176,6 @@ async function handleFind(url, auth) {
   const data = await res.json();
   const row = data.rows && data.rows[0];
   if (!row) return json({ found: false });
-
   const detailRes = await fetch(API_BASE + "/entity/demand/" + row.id + "?expand=agent,state", {
     headers: { "Authorization": auth }
   });
@@ -166,7 +183,6 @@ async function handleFind(url, auth) {
   const detail = await detailRes.json();
   const stateName = detail.state ? detail.state.name : null;
   const places = extractPlaces(detail);
-
   return json({
     found: true,
     id: detail.id,
@@ -176,6 +192,7 @@ async function handleFind(url, auth) {
     positionsCount: (detail.positions && detail.positions.meta) ? detail.positions.meta.size : "—",
     places: places,
     description: detail.description || "",
+    tc: extractTCFromDescription(detail.description),
     stateName: stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
@@ -186,7 +203,6 @@ async function handleRouteDetails(request, auth) {
   const body = await request.json();
   const numbers = Array.isArray(body.numbers) ? body.numbers.map(String).filter(Boolean).slice(0, 100) : [];
   if (!numbers.length) return json({ ok: true, details: [] });
-
   const details = [];
   for (let i = 0; i < numbers.length; i += 10) {
     const batch = numbers.slice(i, i + 10);
@@ -197,23 +213,22 @@ async function handleRouteDetails(request, auth) {
           headers: { "Authorization": auth },
           cf: { cacheTtl: 0 }
         });
-        if (!res.ok) return { number: num, places: null, description: "" };
+        if (!res.ok) return { number: num, places: null, description: "", tc: "" };
         const data = await res.json();
         const row = data.rows && data.rows[0];
-        if (!row) return { number: num, places: null, description: "" };
-
+        if (!row) return { number: num, places: null, description: "", tc: "" };
         const detailRes = await fetch(API_BASE + "/entity/demand/" + row.id + "?expand=agent,state", {
           headers: { "Authorization": auth }
         });
-        if (!detailRes.ok) return { number: num, places: null, description: "" };
+        if (!detailRes.ok) return { number: num, places: null, description: "", tc: "" };
         const detail = await detailRes.json();
-
         return {
           number: num,
           places: extractPlaces(detail),
-          description: detail.description || ""
+          description: detail.description || "",
+          tc: extractTCFromDescription(detail.description)
         };
-      } catch (e) { return { number: num, places: null, description: "" }; }
+      } catch (e) { return { number: num, places: null, description: "", tc: "" }; }
     }));
     details.push.apply(details, batchResults);
     if (i + 10 < numbers.length) await new Promise(function(r) { setTimeout(r, 200); });
@@ -348,11 +363,92 @@ async function handleRouteComplete(request, auth, env) {
   return json({ ok: true, date: date, label: label, completedAt: completedRoutes[label].completedAt });
 }
 
+function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+async function findPhotoFiles(webhook, number) {
+  const esc = escapeRegExp(number);
+  const textRe = new RegExp("Отгрузка\\s*№\\s*" + esc + "(?!\\d)", "i");
+  const nameRe = new RegExp("order-" + esc + "-", "i");
+  const found = new Map();
+  let lastId = 0;
+  for (let page = 0; page < PHOTO_MAX_PAGES; page++) {
+    const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
+    if (lastId) payload.LAST_ID = lastId;
+    let data;
+    try {
+      data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
+    } catch (e) { break; }
+    const result = data.result || {};
+    const messages = Array.isArray(result.messages) ? result.messages : (Array.isArray(result) ? result : []);
+    if (!messages.length) break;
+    const filesArr = Array.isArray(result.files) ? result.files : Object.values(result.files || {});
+    const filesById = {};
+    filesArr.forEach(function(f) { if (f && f.id != null) filesById[String(f.id)] = f; });
+    let matched = 0;
+    let minId = Infinity;
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      const mid = Number(m.id);
+      if (isFinite(mid) && mid < minId) minId = mid;
+      const text = String(m.text || m.message || "");
+      const textOk = textRe.test(text);
+      const filesObj = m.files || m.FILES || {};
+      const fileIds = Object.keys(filesObj);
+      for (let j = 0; j < fileIds.length; j++) {
+        const fid = fileIds[j];
+        const f = filesObj[fid] || filesById[fid] || {};
+        const nameOk = nameRe.test(String(f.name || ""));
+        if ((textOk || nameOk) && !found.has(fid)) {
+          const url = f.urlDownload || f.urlShow || f.url || "";
+          found.set(fid, { id: fid, name: f.name || ("photo-" + fid), url: url, mid: mid });
+          matched++;
+        }
+      }
+    }
+    if (found.size > 0 && matched === 0) break;
+    if (!isFinite(minId) || minId === lastId) break;
+    lastId = minId;
+  }
+  return Array.from(found.values()).sort(function(a, b) { return a.mid - b.mid; });
+}
+
 async function handlePhoto(url, auth, env) {
   const number = (url.searchParams.get("number") || "").trim();
   if (!number) return json({ error: "Не передан номер" }, 400);
+  if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "Bitrix не настроен" }, 500);
   if (!(await verifyAuth(auth))) return unauthorized();
-  return json({ ok: false, error: "Просмотр фото не поддерживается" }, 501);
+  const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+  try {
+    const files = await findPhotoFiles(webhook, number);
+    if (env.ROUTES) {
+      await Promise.all(files.map(function(f) {
+        if (f.url) return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url, name: f.name }), { expirationTtl: 3600 });
+      }));
+    }
+    return json({ ok: true, number: number, photos: files.map(function(f) { return { id: f.id, name: f.name }; }) });
+  } catch (e) {
+    return json({ ok: false, error: String((e && e.message) || e) }, 502);
+  }
+}
+
+async function handlePhotoFile(url, auth, env) {
+  const id = (url.searchParams.get("id") || "").trim();
+  if (!/^\d+$/.test(id)) return json({ error: "Неверный id" }, 400);
+  if (!env.ROUTES) return json({ error: "Хранилище не подключено" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  const cached = await env.ROUTES.get("pf:" + id, { type: "json" });
+  if (!cached || !cached.url) return json({ error: "Файл не найден" }, 404);
+  try {
+    const fileRes = await fetch(cached.url, { redirect: "follow" });
+    if (!fileRes.ok) return json({ error: "Не удалось получить файл" }, 502);
+    const contentType = fileRes.headers.get("Content-Type") || "image/jpeg";
+    return new Response(fileRes.body, {
+      status: 200,
+      headers: { "Content-Type": contentType, "Cache-Control": "private, max-age=3600", ...corsHeaders() }
+    });
+  } catch (e) {
+    return json({ error: "Ошибка загрузки файла" }, 502);
+  }
 }
 
 async function bitrixCall(webhook, method, payload) {
@@ -410,15 +506,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders() });
-
     if (url.pathname === "/login" && request.method === "POST") return handleLogin(request, env);
-
     const auth = await getSessionAuth(request, env);
     if (!auth) return unauthorized();
-
     const username = getBasicUsername(auth);
     if (!isAllowedLogin(username)) return json({ error: "Доступ запрещён" }, 403);
-
     try {
       if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
       if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
@@ -434,6 +526,7 @@ export default {
         return await handleRouteComplete(request, auth, env);
       }
       if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
+      if (url.pathname === "/photo/file" && request.method === "GET") return await handlePhotoFile(url, auth, env);
       if (url.pathname === "/photo/upload" && request.method === "POST") return await handlePhotoUpload(request, auth, env);
       if (url.pathname === "/bitrix/test" && request.method === "GET") return await handleBitrixTest(auth, env);
     } catch (e) {
