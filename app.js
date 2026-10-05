@@ -464,7 +464,7 @@ function renderWrongStatus(data) {
     <div class="num">№ ${escapeHtml(data.name)}</div>
     <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>${data.tc ? `\n    <div class="meta">ТК: <b>${escapeHtml(data.tc)}</b></div>` : ""}
     <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-    <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
+    <p class="meta">Этот заказ ещё не в статусе "Собрано".</p>
   </div>`;
 }
 function renderAlreadyShipped(data) {
@@ -540,7 +540,7 @@ async function loadPhotos(number) {
     if (!photos.length) {
       const d = data.debug || {};
       list.innerHTML = '<div class="hint" style="grid-column:1/-1">Фотографий нет</div>' +
-        (d.scanned != null ? '<div class="hint" style="grid-column:1/-1;font-size:12px">Проверено сообщений: ' + d.scanned + ", с файлами: " + d.withFiles + ", с номером: " + d.withText + "</div>" : "");
+        (d.scanned != null ? '<div class="hint" style="grid-column:1/-1;font-size:12px">Проверено сообщений: ' + d.scanned + ", с файлами: " + d.withFiles + ", с номером: " + d.withText + (d.summary ? "<br>" + escapeHtml(d.summary) : "") + "</div>" : "");
       return;
     }
     list.innerHTML = "";
