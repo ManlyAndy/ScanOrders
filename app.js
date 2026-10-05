@@ -644,7 +644,7 @@ async function loadPhotos(number) {
         }
       }
     }
-    await Promise.all([worker(), worker(), worker()]);
+    await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
   } catch (e) {
     if (reqId !== photoReqId) return;
     list.innerHTML = '<div class="hint" style="grid-column:1/-1">Не удалось загрузить фото — проверьте интернет</div>';
