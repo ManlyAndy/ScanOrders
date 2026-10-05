@@ -373,7 +373,10 @@ async function handleRouteComplete(request, auth, env) {
   return json({ ok: true, date: date, label: label, completedAt: completedRoutes[label].completedAt });
 }
 
-const PHOTO_MAX_PAGES = 30;
+const PHOTO_MAX_PAGES = 20;
+const PHOTO_CACHE_TTL = 21600; // 6 часов
+const PHOTO_TIME_BUDGET_MS = 20000;
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -432,18 +435,20 @@ function processMessages(messages, filesById, ctx) {
   return { minId: minId, fresh: fresh };
 }
 
-async function findPhotoFiles(webhook, number, dbg) {
+async function findPhotoFiles(webhook, number, dbg, quick) {
   const esc = escapeRegExp(number);
   const ctx = {
     textRe: new RegExp("отгрузк[а-я]*\\s*(?:№|#|no\\.?|n)?\\s*" + esc + "(?!\\d)", "i"),
     nameRe: new RegExp("order-" + esc + "(?!\\d)", "i"),
     found: new Map(), seen: new Set(), noFile: [], dbg: dbg
   };
+  const t0 = Date.now();
   dbg.scanned = 0; dbg.withFiles = 0; dbg.withText = 0; dbg.steps = [];
 
   // 1) Поиск по тексту на стороне Битрикс — не зависит от глубины истории чата
   const queries = [String(number), "Отгрузка № " + number, "Отгрузка №" + number];
   for (let q = 0; q < queries.length && !ctx.found.size; q++) {
+    if (q) await sleep(450);
     try {
       const data = await bitrixCall(webhook, "im.dialog.messages.search", {
         CHAT_ID: BITRIX_CHAT_ID, SEARCH_MESSAGE: queries[q], ORDER: { ID: "DESC" }, LIMIT: 200
@@ -461,6 +466,7 @@ async function findPhotoFiles(webhook, number, dbg) {
   if (!ctx.found.size && ctx.noFile.length) {
     const ids = ctx.noFile.slice(0, 8);
     for (let k = 0; k < ids.length; k++) {
+      if (k) await sleep(450);
       try {
         const data = await bitrixCall(webhook, "im.dialog.messages.get", { DIALOG_ID: BITRIX_DIALOG_ID, LAST_ID: ids[k] + 1, LIMIT: 3 });
         const r = splitResult(data);
@@ -472,12 +478,14 @@ async function findPhotoFiles(webhook, number, dbg) {
     dbg.steps.push("уточнено сообщений без файлов: " + ids.length + ", найдено фото: " + ctx.found.size);
   }
 
-  // 2) Запасной путь: постраничный просмотр истории чата
-  if (!ctx.found.size) {
+  // 2) Запасной путь: постраничный просмотр истории чата (в быстром режиме прогрева пропускается)
+  if (!ctx.found.size && !quick) {
     let lastId = 0;
     let mode = "LAST_ID";
     let pages = 0;
     for (let page = 0; page < PHOTO_MAX_PAGES; page++) {
+      if (Date.now() - t0 > PHOTO_TIME_BUDGET_MS) { dbg.steps.push("история: остановил по времени"); break; }
+      if (page) await sleep(450);
       const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
       if (lastId) payload[mode] = lastId;
       const data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
@@ -501,7 +509,8 @@ async function findPhotoFiles(webhook, number, dbg) {
     dbg.steps.push("история: страниц просмотрено " + pages);
   }
 
-  dbg.summary = dbg.steps.join(" | ");
+  dbg.ms = Date.now() - t0;
+  dbg.summary = dbg.steps.join(" | ") + " | " + Math.round(dbg.ms / 100) / 10 + " c";
   return Array.from(ctx.found.values()).sort(function(a, b) { return a.mid - b.mid; });
 }
 
@@ -509,16 +518,28 @@ async function handlePhoto(url, auth, env) {
   const number = (url.searchParams.get("number") || "").trim();
   if (!number) return json({ error: "Не передан номер" }, 400);
   if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "Bitrix не настроен", photos: [] }, 500);
+  const quick = url.searchParams.get("quick") === "1";
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
+  const cacheKey = "pl:" + number;
+  if (env.ROUTES) {
+    try {
+      const cached = await env.ROUTES.get(cacheKey, { type: "json" });
+      if (cached && Array.isArray(cached.photos) && cached.photos.length) {
+        return json({ ok: true, number: number, photos: cached.photos, cached: true, debug: {} });
+      }
+    } catch (e) { /* без кеша */ }
+  }
   const dbg = {};
   try {
-    const files = await findPhotoFiles(webhook, number, dbg);
-    if (env.ROUTES) {
+    const files = await findPhotoFiles(webhook, number, dbg, quick);
+    const photos = files.map(function(f) { return { id: f.id, name: f.name }; });
+    if (env.ROUTES && files.length) {
       await Promise.all(files.map(function(f) {
-        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: 3600 });
+        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_CACHE_TTL + 3600 });
       }));
+      await env.ROUTES.put(cacheKey, JSON.stringify({ photos: photos }), { expirationTtl: PHOTO_CACHE_TTL });
     }
-    return json({ ok: true, number: number, photos: files.map(function(f) { return { id: f.id, name: f.name }; }), debug: dbg });
+    return json({ ok: true, number: number, photos: photos, quick: quick, debug: dbg });
   } catch (e) {
     return json({ ok: false, error: String((e && e.message) || e), photos: [], debug: dbg }, 502);
   }
@@ -529,7 +550,7 @@ async function handlePhotoFile(url, env) {
   if (!/^\d+$/.test(id)) return json({ error: "Неверный id" }, 400);
   if (!env.BITRIX_WEBHOOK_URL || !env.ROUTES) return json({ error: "Bitrix не настроен" }, 500);
   const allowed = await env.ROUTES.get("pf:" + id, { type: "json" });
-  if (!allowed) return json({ error: "Файл не найден" }, 404);
+  if (!allowed) return json({ error: "Файл не найден, обновите отгрузку" }, 404);
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
 
   function isFile(r) {
@@ -538,15 +559,20 @@ async function handlePhotoFile(url, env) {
   }
 
   let fileRes = null;
-  try {
-    const info = await bitrixCall(webhook, "disk.file.get", { id: id });
-    const dl = info.result && info.result.DOWNLOAD_URL;
-    if (dl) fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
-  } catch (e) { fileRes = null; }
-  if (!isFile(fileRes) && allowed.url) {
-    try { fileRes = await fetch(new URL(allowed.url, webhook).href, { redirect: "follow" }); } catch (e) { fileRes = null; }
+  let reason = "";
+  if (allowed.url) {
+    try { fileRes = await fetch(new URL(allowed.url, webhook).href, { redirect: "follow" }); }
+    catch (e) { fileRes = null; reason = "прямая ссылка недоступна"; }
   }
-  if (!isFile(fileRes)) return json({ error: "Не удалось получить файл" }, 502);
+  if (!isFile(fileRes)) {
+    try {
+      const info = await bitrixCall(webhook, "disk.file.get", { id: id });
+      const dl = info.result && info.result.DOWNLOAD_URL;
+      if (dl) fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
+      else reason = "нет ссылки на файл";
+    } catch (e) { fileRes = null; reason = String((e && e.message) || e).slice(0, 80); }
+  }
+  if (!isFile(fileRes)) return json({ error: "Не удалось получить файл" + (reason ? " (" + reason + ")" : "") }, 502);
   return new Response(fileRes.body, {
     status: 200,
     headers: Object.assign({
@@ -556,13 +582,19 @@ async function handlePhotoFile(url, env) {
   });
 }
 
-async function bitrixCall(webhook, method, payload) {
+async function bitrixCall(webhook, method, payload, attempt) {
+  attempt = attempt || 0;
   const r = await fetch(webhook + "/" + method, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
   const data = await r.json().catch(function() { return {}; });
+  const code = String(data.error || "");
+  if ((code === "QUERY_LIMIT_EXCEEDED" || r.status === 429 || r.status === 503) && attempt < 3) {
+    await new Promise(function(res) { setTimeout(res, 700 * (attempt + 1)); });
+    return bitrixCall(webhook, method, payload, attempt + 1);
+  }
   if (!r.ok || data.error) throw new Error(data.error_description || data.error || "Bitrix " + r.status);
   return data;
 }
