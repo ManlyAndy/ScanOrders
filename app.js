@@ -35,7 +35,7 @@ function loadRouteFromStorage() {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw);
-    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, tcChecked: !!data.tcChecked, warmed: data.warmed || [] };
+    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, agentMap: data.agentMap || {}, tcChecked: !!data.tcChecked, tcVersion: data.tcVersion || 0, warmed: data.warmed || [] };
   } catch (e) {
     return null;
   }
@@ -52,7 +52,9 @@ function saveRouteToStorage(route) {
       tasks: route.tasks || [],
       scanned: Array.from(route.scanned),
       tcMap: route.tcMap || {},
+      agentMap: route.agentMap || {},
       tcChecked: !!route.tcChecked,
+      tcVersion: route.tcVersion || 0,
       warmed: route.warmed || [],
     })
   );
@@ -84,7 +86,7 @@ function openRouteModal() {
   box.value = "";
   renderModalList();
   document.getElementById("route-modal").classList.add("active");
-  if (currentRoute.type === "ТК" && !currentRoute.tcChecked) {
+  if (currentRoute.type === "ТК" && (!currentRoute.tcChecked || currentRoute.tcVersion !== 2 || !currentRoute.agentMap)) {
     refreshTcMap(null);
   }
 }
@@ -113,47 +115,69 @@ function renderModalList() {
   const listEl = document.getElementById("modal-list");
   ensureSearchBox();
   const tcMap = currentRoute.tcMap || {};
+  const agentMap = currentRoute.agentMap || {};
   const q = routeSearch.trim().toLowerCase();
 
-  let nums = [...currentRoute.numbers].sort((a, b) => {
-    const tcA = tcMap[a] || "";
-    const tcB = tcMap[b] || "";
-    if (tcA !== tcB) {
-      if (!tcA) return 1;
-      if (!tcB) return -1;
-      return tcA.localeCompare(tcB, "ru", { sensitivity: "base" });
-    }
+  let nums = [...currentRoute.numbers];
+  nums.sort((a, b) => {
+    const tcA = tcMap[a] || "Без ТК";
+    const tcB = tcMap[b] || "Без ТК";
+    const tcCmp = tcA.localeCompare(tcB, "ru", { sensitivity: "base" });
+    if (tcCmp) return tcCmp;
+
+    const clientA = agentMap[a] || "";
+    const clientB = agentMap[b] || "";
+    const clientCmp = clientA.localeCompare(clientB, "ru", { sensitivity: "base" });
+    if (clientCmp) return clientCmp;
+
     const aScanned = currentRoute.scanned.has(a);
     const bScanned = currentRoute.scanned.has(b);
-    if (aScanned === bScanned) return a.localeCompare(b, undefined, { numeric: true });
-    return aScanned ? 1 : -1;
+    if (aScanned !== bScanned) return aScanned ? 1 : -1;
+    return a.localeCompare(b, undefined, { numeric: true });
   });
+
   if (q) {
-    nums = nums.filter((n) => n.toLowerCase().includes(q) || (tcMap[n] || "").toLowerCase().includes(q));
+    nums = nums.filter((n) => {
+      const tc = tcMap[n] || "Без ТК";
+      const client = agentMap[n] || "";
+      return n.toLowerCase().includes(q) || tc.toLowerCase().includes(q) || client.toLowerCase().includes(q);
+    });
   }
 
   if (!nums.length) {
     listEl.innerHTML = '<div class="hint">Ничего не найдено</div>';
   } else {
-    listEl.innerHTML = nums
-      .map((num) => {
-        const scanned = currentRoute.scanned.has(num);
-        const tc = tcMap[num] || "";
-        return `<div class="modal-row ${scanned ? "scanned" : ""}" data-num="${escapeAttr(num)}" onclick="openFromList(this.dataset.num)" style="cursor:pointer;align-items:center;">
-        <span>№ ${escapeHtml(num)}${tc ? ' <span style="color:#666;">— ' + escapeHtml(tc) + "</span>" : ""}</span>
+    const rows = [];
+    let lastGroup = null;
+    let lastClient = null;
+    nums.forEach((num) => {
+      const scanned = currentRoute.scanned.has(num);
+      const tc = tcMap[num] || "Без ТК";
+      const client = agentMap[num] || "Без клиента";
+      const groupKey = tc.toLocaleLowerCase();
+      const clientKey = client.toLocaleLowerCase();
+      if (!q && groupKey !== lastGroup) {
+        rows.push(`<div style="margin-top:12px;padding:7px 10px;background:#f0f2f5;border-radius:8px;font-weight:700;">${escapeHtml(tc)}</div>`);
+        lastGroup = groupKey;
+        lastClient = null;
+      }
+      if (!q && clientKey !== lastClient) {
+        rows.push(`<div style="padding:7px 10px 3px;color:#666;font-size:13px;font-weight:600;">${escapeHtml(client)}</div>`);
+        lastClient = clientKey;
+      }
+      rows.push(`<div class="modal-row ${scanned ? "scanned" : ""}" data-num="${escapeAttr(num)}" onclick="openFromList(this.dataset.num)" style="cursor:pointer;align-items:center;">
+        <span>№ ${escapeHtml(num)}${q ? ' <span style="color:#666;">— ' + escapeHtml(tc) + ' — ' + escapeHtml(client) + "</span>" : ""}</span>
         <span><span class="check">${scanned ? "✓" : ""}</span><span style="color:#999;margin-left:10px;">›</span></span>
-      </div>`;
-      })
-      .join("");
+      </div>`);
+    });
+    listEl.innerHTML = rows.join("");
   }
   if (!q && currentRoute.tasks && currentRoute.tasks.length) {
     listEl.innerHTML += `<div style="margin-top:14px;font-weight:700;">Доп. задания</div>` +
       currentRoute.tasks.map(t => `<div class="modal-row"><span>ℹ️ ${escapeHtml(t)}</span></div>`).join("");
   }
   const titleEl = document.getElementById("modal-title");
-  if (titleEl) {
-    titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
-  }
+  if (titleEl) titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
 }
 function openFromList(num) {
   if (!num) return;
@@ -180,7 +204,11 @@ async function refreshTcMap(statusEl) {
       if (res.status === 401) { logout(); return; }
       if (!res.ok) continue;
       const data = await res.json();
-      (data.details || []).forEach((d) => { if (d.tc) route.tcMap[d.number] = d.tc; });
+      (data.details || []).forEach((d) => {
+        route.tcMap[d.number] = d.tc || "";
+        route.agentMap[d.number] = d.agentName || "";
+      });
+      route.tcVersion = 2;
       saveRouteToStorage(route);
       if (currentRoute === route) renderModalList();
     }
@@ -220,7 +248,9 @@ async function loadRoute() {
       tasks: (data.tasksByLabel && data.tasksByLabel[selectedRouteType]) || [],
       scanned: new Set(),
       tcMap: {},
+      agentMap: {},
       tcChecked: false,
+      tcVersion: 2,
       warmed: []
     };
     saveRouteToStorage();
