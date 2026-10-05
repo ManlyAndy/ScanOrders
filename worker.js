@@ -389,49 +389,120 @@ function collectFileIds(m) {
   return ids.filter(function(x) { return x && x !== "undefined" && x !== "null"; });
 }
 
-async function findPhotoFiles(webhook, number, dbg) {
-  const esc = escapeRegExp(number);
-  const textRe = new RegExp("отгрузк[а-я]*\\s*(?:№|#|no\\.?|n)?\\s*" + esc + "(?!\\d)", "i");
-  const nameRe = new RegExp("order-" + esc + "(?!\\d)", "i");
-  const found = new Map();
-  let lastId = 0;
-  dbg.pages = 0; dbg.scanned = 0; dbg.withFiles = 0; dbg.withText = 0;
-  for (let page = 0; page < PHOTO_MAX_PAGES; page++) {
-    const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
-    if (lastId) payload.LAST_ID = lastId;
-    const data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
-    const res = data.result || {};
-    const messages = Array.isArray(res.messages) ? res.messages : Object.values(res.messages || {});
-    if (!messages.length) break;
-    dbg.pages++;
-    const filesArr = Array.isArray(res.files) ? res.files : Object.values(res.files || {});
-    const filesById = {};
-    filesArr.forEach(function(f) { if (f && f.id != null) filesById[String(f.id)] = f; });
-    let minId = Infinity;
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      const mid = Number(m.id || m.ID);
-      if (mid < minId) minId = mid;
-      dbg.scanned++;
-      const text = String(m.text || m.message || m.MESSAGE || "").replace(/\u00a0/g, " ");
-      const ids = collectFileIds(m);
-      if (ids.length) dbg.withFiles++;
-      const textOk = textRe.test(text);
-      if (textOk) dbg.withText++;
-      if (!ids.length) continue;
-      for (let j = 0; j < ids.length; j++) {
-        const fid = ids[j];
-        const f = filesById[fid] || {};
-        const nameOk = nameRe.test(String(f.name || ""));
-        if ((textOk || nameOk) && !found.has(fid)) {
-          found.set(fid, { id: fid, name: f.name || ("photo-" + fid), url: f.urlDownload || f.urlShow || "", mid: mid });
-        }
+function splitResult(data) {
+  const res = (data && data.result) || {};
+  const messages = Array.isArray(res.messages) ? res.messages : Object.values(res.messages || {});
+  const filesArr = Array.isArray(res.files) ? res.files : Object.values(res.files || {});
+  const filesById = {};
+  filesArr.forEach(function(f) { if (f && f.id != null) filesById[String(f.id)] = f; });
+  return { messages: messages, filesById: filesById };
+}
+
+function msgId(m) { return Number(m.id || m.ID); }
+
+// Разбор пачки сообщений: ищем файлы, подпись которых относится к нужной отгрузке
+function processMessages(messages, filesById, ctx) {
+  let minId = Infinity;
+  let fresh = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    const mid = msgId(m);
+    if (mid < minId) minId = mid;
+    if (ctx.seen.has(mid)) continue;
+    ctx.seen.add(mid);
+    fresh++;
+    const dbg = ctx.dbg;
+    dbg.scanned++;
+    const text = String(m.text || m.message || m.MESSAGE || "").replace(/\u00a0/g, " ");
+    const ids = collectFileIds(m);
+    if (ids.length) dbg.withFiles++;
+    const textOk = ctx.textRe.test(text);
+    if (textOk) dbg.withText++;
+    if (textOk && !ids.length && ctx.noFile.indexOf(mid) < 0) ctx.noFile.push(mid);
+    if (!ids.length) continue;
+    for (let j = 0; j < ids.length; j++) {
+      const fid = ids[j];
+      const f = filesById[fid] || {};
+      const nameOk = ctx.nameRe.test(String(f.name || ""));
+      if ((textOk || nameOk) && !ctx.found.has(fid)) {
+        ctx.found.set(fid, { id: fid, name: f.name || ("photo-" + fid), url: f.urlDownload || f.urlShow || "", mid: mid });
       }
     }
-    if (!isFinite(minId) || minId === lastId) break;
-    lastId = minId;
   }
-  return Array.from(found.values()).sort(function(a, b) { return a.mid - b.mid; });
+  return { minId: minId, fresh: fresh };
+}
+
+async function findPhotoFiles(webhook, number, dbg) {
+  const esc = escapeRegExp(number);
+  const ctx = {
+    textRe: new RegExp("отгрузк[а-я]*\\s*(?:№|#|no\\.?|n)?\\s*" + esc + "(?!\\d)", "i"),
+    nameRe: new RegExp("order-" + esc + "(?!\\d)", "i"),
+    found: new Map(), seen: new Set(), noFile: [], dbg: dbg
+  };
+  dbg.scanned = 0; dbg.withFiles = 0; dbg.withText = 0; dbg.steps = [];
+
+  // 1) Поиск по тексту на стороне Битрикс — не зависит от глубины истории чата
+  const queries = [String(number), "Отгрузка № " + number, "Отгрузка №" + number];
+  for (let q = 0; q < queries.length && !ctx.found.size; q++) {
+    try {
+      const data = await bitrixCall(webhook, "im.dialog.messages.search", {
+        CHAT_ID: BITRIX_CHAT_ID, SEARCH_MESSAGE: queries[q], ORDER: { ID: "DESC" }, LIMIT: 200
+      });
+      const r = splitResult(data);
+      const p = processMessages(r.messages, r.filesById, ctx);
+      dbg.steps.push("поиск «" + queries[q] + "»: " + r.messages.length + " сообщ., найдено фото: " + ctx.found.size);
+      void p;
+    } catch (e) {
+      dbg.steps.push("поиск «" + queries[q] + "»: ошибка " + String((e && e.message) || e).slice(0, 80));
+    }
+  }
+
+  // сообщения с нужной подписью, но без файлов в выдаче поиска: достаём их отдельно
+  if (!ctx.found.size && ctx.noFile.length) {
+    const ids = ctx.noFile.slice(0, 8);
+    for (let k = 0; k < ids.length; k++) {
+      try {
+        const data = await bitrixCall(webhook, "im.dialog.messages.get", { DIALOG_ID: BITRIX_DIALOG_ID, LAST_ID: ids[k] + 1, LIMIT: 3 });
+        const r = splitResult(data);
+        const only = r.messages.filter(function(m) { return msgId(m) === ids[k]; });
+        ctx.seen.delete(ids[k]);
+        processMessages(only, r.filesById, ctx);
+      } catch (e) { /* пропускаем */ }
+    }
+    dbg.steps.push("уточнено сообщений без файлов: " + ids.length + ", найдено фото: " + ctx.found.size);
+  }
+
+  // 2) Запасной путь: постраничный просмотр истории чата
+  if (!ctx.found.size) {
+    let lastId = 0;
+    let mode = "LAST_ID";
+    let pages = 0;
+    for (let page = 0; page < PHOTO_MAX_PAGES; page++) {
+      const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
+      if (lastId) payload[mode] = lastId;
+      const data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
+      const r = splitResult(data);
+      if (!r.messages.length) { dbg.steps.push("история: пусто на странице " + (page + 1)); break; }
+      let p = processMessages(r.messages, r.filesById, ctx);
+      if (!p.fresh && mode === "LAST_ID" && lastId) {
+        // LAST_ID не двигает историю — пробуем FIRST_ID
+        const alt = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50, FIRST_ID: lastId };
+        const data2 = await bitrixCall(webhook, "im.dialog.messages.get", alt);
+        const r2 = splitResult(data2);
+        const p2 = processMessages(r2.messages, r2.filesById, ctx);
+        if (p2.fresh) { mode = "FIRST_ID"; p = p2; dbg.steps.push("история: переключился на FIRST_ID"); }
+        else { dbg.steps.push("история: страница " + (page + 1) + " не даёт новых сообщений"); break; }
+      }
+      pages++;
+      if (!isFinite(p.minId) || p.minId === lastId) { dbg.steps.push("история: конец на странице " + (page + 1)); break; }
+      lastId = p.minId;
+      if (ctx.found.size && !p.fresh) break;
+    }
+    dbg.steps.push("история: страниц просмотрено " + pages);
+  }
+
+  dbg.summary = dbg.steps.join(" | ");
+  return Array.from(ctx.found.values()).sort(function(a, b) { return a.mid - b.mid; });
 }
 
 async function handlePhoto(url, auth, env) {
