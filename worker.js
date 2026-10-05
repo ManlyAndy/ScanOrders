@@ -147,23 +147,24 @@ function extractPlaces(row) {
 
 function extractTCFromDescription(desc) {
   if (!desc) return "";
-  const text = desc.replace(/[«»"'']/g, '"');
-  const lines = text.split(/\n/);
+  const text = String(desc).replace(/[«»"'']/g, '"');
+  const lines = text.split(/\r?\n/);
+  const stopWords = ['до', 'в', 'по', 'на', 'от', 'для', 'терминала', 'терминалу', 'г.', 'г', 'получатель', 'плательщик', 'адрес', 'наб.', 'д.', 'корп.', 'кв.', 'тел.'];
   for (let line of lines) {
     line = line.trim();
-    if (line.indexOf("ТК ") === 0) {
-      let tc = line.substring(3).trim();
-      tc = tc.replace(/^["']|["']$/g, '');
-      const words = tc.split(/\s+/);
-      const stopWords = ['до', 'в', 'по', 'на', 'от', 'для', 'терминала', 'терминалу', 'г.', 'г', 'получатель', 'плательщик', 'адрес', 'наб.', 'д.', 'корп.', 'кв.', 'тел.'];
-      let result = [];
-      for (let word of words) {
-        const cleanWord = word.replace(/["',.]/g, '');
-        if (stopWords.indexOf(cleanWord.toLowerCase()) >= 0) break;
-        if (cleanWord) result.push(cleanWord);
-      }
-      return result.slice(0, 3).join(' ');
+    // Важно: транспортная определяется только из отдельного поля/строки ТК.
+    // Например, «ТК Байкал» -> «Байкал», а «тест Байкал» -> без ТК.
+    const m = line.match(/^ТК\s*(?::|-)?\s*(.+)$/i);
+    if (!m) continue;
+    let tc = m[1].trim().replace(/^["']|["']$/g, '');
+    const words = tc.split(/\s+/);
+    const result = [];
+    for (const word of words) {
+      const cleanWord = word.replace(/["',.]/g, '');
+      if (stopWords.indexOf(cleanWord.toLowerCase()) >= 0) break;
+      if (cleanWord) result.push(cleanWord);
     }
+    if (result.length) return result.slice(0, 3).join(' ');
   }
   return "";
 }
@@ -221,24 +222,25 @@ async function handleRouteDetails(request, auth) {
           headers: { "Authorization": auth },
           cf: { cacheTtl: 0 }
         });
-        if (!res.ok) return { number: num, places: null, description: "", tc: "" };
+        if (!res.ok) return { number: num, places: null, description: "", tc: "", agentName: "" };
         const data = await res.json();
         const row = data.rows && data.rows[0];
-        if (!row) return { number: num, places: null, description: "", tc: "" };
+        if (!row) return { number: num, places: null, description: "", tc: "", agentName: "" };
 
         const detailRes = await fetch(API_BASE + "/entity/demand/" + row.id + "?expand=agent,state", {
           headers: { "Authorization": auth }
         });
-        if (!detailRes.ok) return { number: num, places: null, description: "", tc: "" };
+        if (!detailRes.ok) return { number: num, places: null, description: "", tc: "", agentName: "" };
         const detail = await detailRes.json();
 
         return {
           number: num,
           places: extractPlaces(detail),
           description: detail.description || "",
-          tc: extractTCFromDescription(detail.description)
+          tc: extractTCFromDescription(detail.description),
+          agentName: detail.agent && detail.agent.name ? detail.agent.name : ""
         };
-      } catch (e) { return { number: num, places: null, description: "", tc: "" }; }
+      } catch (e) { return { number: num, places: null, description: "", tc: "", agentName: "" }; }
     }));
     details.push.apply(details, batchResults);
     if (i + 10 < numbers.length) await new Promise(function(r) { setTimeout(r, 200); });
@@ -485,8 +487,9 @@ function processMessages(messages, filesById, ctx) {
     const ids = collectFileIds(m);
     if (ids.length) dbg.withFiles++;
     const textOk = ctx.textRe.test(text);
-    if (textOk) dbg.withText++;
-    if (textOk && !ids.length && ctx.noFile.indexOf(mid) < 0) ctx.noFile.push(mid);
+    const bareNumberOk = ctx.bareNumberRe.test(text);
+    if (textOk || bareNumberOk) dbg.withText++;
+    if ((textOk || bareNumberOk) && !ids.length && ctx.noFile.indexOf(mid) < 0) ctx.noFile.push(mid);
     if (!ids.length) continue;
     for (let j = 0; j < ids.length; j++) {
       const fid = ids[j];
@@ -504,6 +507,7 @@ async function findPhotoFiles(webhook, number, dbg, quick) {
   const esc = escapeRegExp(number);
   const ctx = {
     textRe: new RegExp("отгрузк[а-я]*\\s*(?:№|#|no\\.?|n)?\\s*" + esc + "(?!\\d)", "i"),
+    bareNumberRe: new RegExp("^\\s*" + esc + "\\s*$"),
     nameRe: new RegExp("order-" + esc + "(?!\\d)", "i"),
     found: new Map(), seen: new Set(), noFile: [], dbg: dbg
   };
