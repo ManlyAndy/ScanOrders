@@ -11,6 +11,8 @@ let routeSearch = "";
 let tcLoading = false;
 let photoReqId = 0;
 let photoUrls = [];
+let photoBusy = 0;
+let warmRunId = 0;
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -26,13 +28,14 @@ function selectRouteType(type) {
   if (hireBtn) hireBtn.classList.toggle("active", type === "Найм");
   currentRoute = loadRouteFromStorage();
   renderRouteStatus();
+  setTimeout(startPrewarm, 3000);
 }
 function loadRouteFromStorage() {
   const raw = localStorage.getItem(routeStorageKey());
   if (!raw) return null;
   try {
     const data = JSON.parse(raw);
-    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, tcChecked: !!data.tcChecked };
+    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, tcChecked: !!data.tcChecked, warmed: data.warmed || [] };
   } catch (e) {
     return null;
   }
@@ -50,6 +53,7 @@ function saveRouteToStorage(route) {
       scanned: Array.from(route.scanned),
       tcMap: route.tcMap || {},
       tcChecked: !!route.tcChecked,
+      warmed: route.warmed || [],
     })
   );
 }
@@ -216,11 +220,13 @@ async function loadRoute() {
       tasks: (data.tasksByLabel && data.tasksByLabel[selectedRouteType]) || [],
       scanned: new Set(),
       tcMap: {},
-      tcChecked: false
+      tcChecked: false,
+      warmed: []
     };
     saveRouteToStorage();
     await refreshTcMap(el);
     renderRouteStatus();
+    startPrewarm();
   } catch (e) {
     el.textContent = "Не удалось загрузить маршрут — проверьте интернет";
   }
@@ -316,6 +322,7 @@ function enterScanScreen() {
   currentRoute = loadRouteFromStorage();
   renderRouteStatus();
   show("scan");
+  setTimeout(startPrewarm, 3000);
   setTimeout(startScanner, 300);
 }
 
@@ -464,7 +471,7 @@ function renderWrongStatus(data) {
     <div class="num">№ ${escapeHtml(data.name)}</div>
     <div class="meta">Покупатель: <b>${escapeHtml(data.agentName)}</b></div>${data.tc ? `\n    <div class="meta">ТК: <b>${escapeHtml(data.tc)}</b></div>` : ""}
     <div class="meta">Текущий статус: <b>${escapeHtml(data.stateName || "—")}</b></div>
-    <p class="meta">Этот заказ ещё не в статусе "Собрано".</p>
+    <p class="meta">Этот заказ ещё не в статусе "Собрано" — отгружать его сейчас нельзя.</p>
   </div>`;
 }
 function renderAlreadyShipped(data) {
@@ -518,7 +525,68 @@ function appendPhotoSection(number) {
   sec.style.marginTop = "16px";
   sec.innerHTML = '<h3 style="margin:0 0 8px;">Фотографии отгрузки</h3><div id="photo-list" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;"><div class="hint" style="grid-column:1/-1">Загрузка фото…</div></div>';
   body.appendChild(sec);
-  loadPhotos(number);
+  photoBusy++;
+  loadPhotos(number).finally(function () { photoBusy = Math.max(0, photoBusy - 1); });
+}
+// ---------- ПРОГРЕВ ФОТО В ФОНЕ ----------
+function sleepMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function isResultScreenActive() {
+  const el = document.getElementById("screen-result");
+  return !!(el && el.classList.contains("active"));
+}
+async function startPrewarm() {
+  if (!currentRoute || !getSavedAuth()) return;
+  const route = currentRoute;
+  const runId = ++warmRunId;
+  if (!Array.isArray(route.warmed)) route.warmed = [];
+  const warmed = new Set(route.warmed);
+  const queue = route.numbers.filter((n) => !route.scanned.has(n))
+    .concat(route.numbers.filter((n) => route.scanned.has(n)))
+    .filter((n) => !warmed.has(n));
+  if (!queue.length) return;
+  let errors = 0;
+  for (const num of queue) {
+    if (runId !== warmRunId || currentRoute !== route || !getSavedAuth()) return;
+    while (isResultScreenActive() || photoBusy > 0) {
+      await sleepMs(500);
+      if (runId !== warmRunId || currentRoute !== route || !getSavedAuth()) return;
+    }
+    try {
+      const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(num)}&quick=1`, {
+        headers: { Authorization: getSavedAuth() },
+      });
+      if (res.status === 401) return;
+      if (res.ok) {
+        await res.json().catch(() => ({}));
+        route.warmed.push(num);
+        saveRouteToStorage(route);
+        errors = 0;
+      } else if (++errors >= 3) {
+        return;
+      }
+    } catch (e) {
+      if (++errors >= 3) return;
+    }
+    await sleepMs(700);
+  }
+}
+async function fetchPhotoBlob(id, headers) {
+  let lastErr = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(id)}`, { headers });
+      if (r.ok) return await r.blob();
+      if (r.status === 401) { logout(); throw new Error("сессия"); }
+      lastErr = "код " + r.status;
+      try { const j = await r.json(); if (j && j.error) lastErr = j.error; } catch (e) {}
+      if (r.status === 404) break;
+    } catch (e) {
+      if (e && e.message === "сессия") throw e;
+      lastErr = "нет сети";
+    }
+    await new Promise((res) => setTimeout(res, 700 * (attempt + 1)));
+  }
+  throw new Error(lastErr || "ошибка");
 }
 async function loadPhotos(number) {
   const reqId = ++photoReqId;
@@ -533,7 +601,8 @@ async function loadPhotos(number) {
     if (res.status === 401) { logout(); return; }
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      list.innerHTML = '<div class="hint" style="grid-column:1/-1">Не удалось загрузить фото' + (data.error ? ": " + escapeHtml(data.error) : "") + "</div>";
+      list.innerHTML = '<div class="hint" style="grid-column:1/-1">Не удалось загрузить фото' + (data.error ? ": " + escapeHtml(data.error) : "") +
+        '<br><button class="btn-secondary" style="margin-top:8px" onclick="appendPhotoSection(\'' + escapeAttr(number) + '\')">Повторить</button></div>';
       return;
     }
     const photos = Array.isArray(data.photos) ? data.photos : [];
@@ -546,30 +615,36 @@ async function loadPhotos(number) {
     list.innerHTML = "";
     const cells = photos.map(() => {
       const c = document.createElement("div");
-      c.style.cssText = "background:#e9ecef;border-radius:8px;overflow:hidden;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;font-size:12px;color:#777;text-align:center;";
+      c.style.cssText = "background:#e9ecef;border-radius:8px;overflow:hidden;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;font-size:12px;color:#777;text-align:center;padding:4px;";
       c.textContent = "Загрузка…";
       list.appendChild(c);
       return c;
     });
-    await Promise.all(photos.map(async (p, idx) => {
-      try {
-        const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(p.id)}`, { headers });
-        if (!r.ok) throw new Error("bad");
-        const blob = await r.blob();
-        if (reqId !== photoReqId) return;
-        const src = URL.createObjectURL(blob);
-        photoUrls.push(src);
-        const img = document.createElement("img");
-        img.src = src;
-        img.alt = p.name || "";
-        img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;";
-        img.onclick = () => openPhotoViewer(src);
-        cells[idx].textContent = "";
-        cells[idx].appendChild(img);
-      } catch (e) {
-        cells[idx].textContent = "Не удалось загрузить";
+    let next = 0;
+    async function worker() {
+      while (next < photos.length) {
+        const idx = next++;
+        const p = photos[idx];
+        try {
+          const blob = await fetchPhotoBlob(p.id, headers);
+          if (reqId !== photoReqId) return;
+          const src = URL.createObjectURL(blob);
+          photoUrls.push(src);
+          const img = document.createElement("img");
+          img.src = src;
+          img.alt = p.name || "";
+          img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;";
+          img.onclick = () => openPhotoViewer(src);
+          cells[idx].style.padding = "0";
+          cells[idx].textContent = "";
+          cells[idx].appendChild(img);
+        } catch (e) {
+          if (reqId !== photoReqId) return;
+          cells[idx].textContent = "Не удалось загрузить: " + ((e && e.message) || "ошибка");
+        }
       }
-    }));
+    }
+    await Promise.all([worker(), worker(), worker()]);
   } catch (e) {
     if (reqId !== photoReqId) return;
     list.innerHTML = '<div class="hint" style="grid-column:1/-1">Не удалось загрузить фото — проверьте интернет</div>';
