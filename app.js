@@ -35,7 +35,7 @@ function loadRouteFromStorage() {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw);
-    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, agentMap: data.agentMap || {}, tcChecked: !!data.tcChecked, tcVersion: data.tcVersion || 0, warmed: data.warmed || [] };
+    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, agentMap: data.agentMap || {}, clientMap: data.clientMap || {}, tcChecked: !!data.tcChecked, tcVersion: data.tcVersion || 0, warmed: data.warmed || [] };
   } catch (e) {
     return null;
   }
@@ -53,8 +53,9 @@ function saveRouteToStorage(route) {
       scanned: Array.from(route.scanned),
       tcMap: route.tcMap || {},
       agentMap: route.agentMap || {},
+      clientMap: route.clientMap || {},
       tcChecked: !!route.tcChecked,
-      tcVersion: route.tcVersion || 0,
+      tcVersion: 3,
       warmed: route.warmed || [],
     })
   );
@@ -86,8 +87,8 @@ function openRouteModal() {
   box.value = "";
   renderModalList();
   document.getElementById("route-modal").classList.add("active");
-  if (currentRoute.type === "ТК" && (!currentRoute.tcChecked || currentRoute.tcVersion !== 2 || !currentRoute.agentMap)) {
-    refreshTcMap(null);
+  if (currentRoute.type === "ТК" && (!currentRoute.tcChecked || currentRoute.tcVersion !== 3 || !currentRoute.agentMap)) {
+    refreshTcMap(null, true);
   }
 }
 function closeRouteModal() {
@@ -110,71 +111,73 @@ function ensureSearchBox() {
   listEl.parentNode.insertBefore(box, listEl);
   return box;
 }
+function TC_ORDER_RANK(tc) {
+  const order = ["Деловые Линии", "Байкал", "ПЭК", "Новая Линия", "Мэджик Транс", "Главтрасса", "НТК", "РТС", "Рейл континент", "Авангард", "Витэка", "Транзит", "Сдэк", "Без ТК"];
+  const i = order.findIndex((x) => x.toLowerCase() === String(tc || "").toLowerCase());
+  return i < 0 ? order.length + 1 : i;
+}
 function renderModalList() {
   if (!currentRoute) return;
   const listEl = document.getElementById("modal-list");
   ensureSearchBox();
   const tcMap = currentRoute.tcMap || {};
   const agentMap = currentRoute.agentMap || {};
+  const clientMap = currentRoute.clientMap || {};
   const q = routeSearch.trim().toLowerCase();
-
   let nums = [...currentRoute.numbers];
   nums.sort((a, b) => {
-    const tcA = tcMap[a] || "Без ТК";
-    const tcB = tcMap[b] || "Без ТК";
-    const tcCmp = tcA.localeCompare(tcB, "ru", { sensitivity: "base" });
-    if (tcCmp) return tcCmp;
-
-    const clientA = agentMap[a] || "";
-    const clientB = agentMap[b] || "";
-    const clientCmp = clientA.localeCompare(clientB, "ru", { sensitivity: "base" });
-    if (clientCmp) return clientCmp;
-
+    const tcA = (tcMap[a] || "Без ТК").trim();
+    const tcB = (tcMap[b] || "Без ТК").trim();
+    const rankA = TC_ORDER_RANK(tcA);
+    const rankB = TC_ORDER_RANK(tcB);
+    if (rankA !== rankB) return rankA - rankB;
+    const c = tcA.localeCompare(tcB, "ru", { sensitivity: "base" });
+    if (c) return c;
+    const clA = (clientMap[a] || agentMap[a] || "Без клиента").trim();
+    const clB = (clientMap[b] || agentMap[b] || "Без клиента").trim();
+    const c2 = clA.localeCompare(clB, "ru", { sensitivity: "base" });
+    if (c2) return c2;
     const aScanned = currentRoute.scanned.has(a);
     const bScanned = currentRoute.scanned.has(b);
     if (aScanned !== bScanned) return aScanned ? 1 : -1;
     return a.localeCompare(b, undefined, { numeric: true });
   });
-
   if (q) {
     nums = nums.filter((n) => {
       const tc = tcMap[n] || "Без ТК";
-      const client = agentMap[n] || "";
+      const client = clientMap[n] || agentMap[n] || "Без клиента";
       return n.toLowerCase().includes(q) || tc.toLowerCase().includes(q) || client.toLowerCase().includes(q);
     });
   }
-
   if (!nums.length) {
     listEl.innerHTML = '<div class="hint">Ничего не найдено</div>';
   } else {
-    const rows = [];
-    let lastGroup = null;
+    let html = "";
+    let lastTc = null;
     let lastClient = null;
     nums.forEach((num) => {
       const scanned = currentRoute.scanned.has(num);
       const tc = tcMap[num] || "Без ТК";
       const client = agentMap[num] || "Без клиента";
-      const groupKey = tc.toLocaleLowerCase();
-      const clientKey = client.toLocaleLowerCase();
-      if (!q && groupKey !== lastGroup) {
-        rows.push(`<div style="margin-top:12px;padding:7px 10px;background:#f0f2f5;border-radius:8px;font-weight:700;">${escapeHtml(tc)}</div>`);
-        lastGroup = groupKey;
+      if (!q && tc !== lastTc) {
+        html += `<div style="margin-top:10px;padding:8px 4px;font-weight:800;font-size:15px;border-bottom:1px solid #ddd;">${escapeHtml(tc)}</div>`;
+        lastTc = tc;
         lastClient = null;
       }
-      if (!q && clientKey !== lastClient) {
-        rows.push(`<div style="padding:7px 10px 3px;color:#666;font-size:13px;font-weight:600;">${escapeHtml(client)}</div>`);
-        lastClient = clientKey;
+      if (!q && client !== lastClient) {
+        html += `<div style="padding:7px 4px 4px;color:#666;font-weight:700;font-size:13px;">${escapeHtml(client)}</div>`;
+        lastClient = client;
       }
-      rows.push(`<div class="modal-row ${scanned ? "scanned" : ""}" data-num="${escapeAttr(num)}" onclick="openFromList(this.dataset.num)" style="cursor:pointer;align-items:center;">
-        <span>№ ${escapeHtml(num)}${q ? ' <span style="color:#666;">— ' + escapeHtml(tc) + ' — ' + escapeHtml(client) + "</span>" : ""}</span>
+      const suffix = q ? ` <span style="color:#666;">— ${escapeHtml(tc)} · ${escapeHtml(client)}</span>` : "";
+      html += `<div class="modal-row ${scanned ? "scanned" : ""}" data-num="${escapeAttr(num)}" onclick="openFromList(this.dataset.num)" style="cursor:pointer;align-items:center;">
+        <span>№ ${escapeHtml(num)}${suffix}</span>
         <span><span class="check">${scanned ? "✓" : ""}</span><span style="color:#999;margin-left:10px;">›</span></span>
-      </div>`);
+      </div>`;
     });
-    listEl.innerHTML = rows.join("");
+    listEl.innerHTML = html;
   }
   if (!q && currentRoute.tasks && currentRoute.tasks.length) {
-    listEl.innerHTML += `<div style="margin-top:14px;font-weight:700;">Доп. задания</div>` +
-      currentRoute.tasks.map(t => `<div class="modal-row"><span>ℹ️ ${escapeHtml(t)}</span></div>`).join("");
+    listEl.innerHTML += `<div style="margin-top:14px;font-weight:700;">Доп. задания</div>` + currentRoute.tasks.map(t => `<div class="modal-row"><span>ℹ️ ${escapeHtml(t)}</span></div>`).join("");
   }
   const titleEl = document.getElementById("modal-title");
   if (titleEl) titleEl.textContent = `Маршрут "${currentRoute.type}" — ${currentRoute.scanned.size} из ${currentRoute.numbers.length}`;
@@ -184,12 +187,14 @@ function openFromList(num) {
   closeRouteModal();
   lookupCode(String(num), { fromList: true });
 }
-async function refreshTcMap(statusEl) {
+async function refreshTcMap(statusEl, force) {
   if (!currentRoute || tcLoading) return;
   const route = currentRoute;
   if (route.type !== "ТК") return;
   route.tcMap = route.tcMap || {};
-  const nums = route.numbers.filter((n) => !route.tcMap[n]);
+  route.agentMap = route.agentMap || {};
+  route.clientMap = route.clientMap || {};
+  const nums = force ? route.numbers.slice() : route.numbers.filter((n) => !route.tcMap[n]);
   if (!nums.length) { route.tcChecked = true; saveRouteToStorage(route); return; }
   tcLoading = true;
   try {
@@ -207,12 +212,13 @@ async function refreshTcMap(statusEl) {
       (data.details || []).forEach((d) => {
         route.tcMap[d.number] = d.tc || "";
         route.agentMap[d.number] = d.agentName || "";
+        route.clientMap[d.number] = d.clientName || "";
       });
-      route.tcVersion = 2;
       saveRouteToStorage(route);
       if (currentRoute === route) renderModalList();
     }
     route.tcChecked = true;
+    route.tcVersion = 3;
     saveRouteToStorage(route);
   } catch (e) {
     // ТК не загрузились — продолжим без них
@@ -250,7 +256,7 @@ async function loadRoute() {
       tcMap: {},
       agentMap: {},
       tcChecked: false,
-      tcVersion: 2,
+      tcVersion: 3,
       warmed: []
     };
     saveRouteToStorage();
@@ -600,9 +606,16 @@ async function startPrewarm() {
     await sleepMs(700);
   }
 }
-async function fetchPhotoBlob(id, headers) {
+async function fetchPhotoBlob(photo, headers) {
+  if (photo && photo.url) {
+    try {
+      const direct = await fetch(photo.url, { redirect: "follow" });
+      if (direct.ok) return await direct.blob();
+    } catch (e) {}
+  }
+  const id = photo && photo.id;
   let lastErr = "";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(id)}`, { headers });
       if (r.ok) return await r.blob();
@@ -614,7 +627,7 @@ async function fetchPhotoBlob(id, headers) {
       if (e && e.message === "сессия") throw e;
       lastErr = "нет сети";
     }
-    await new Promise((res) => setTimeout(res, 700 * (attempt + 1)));
+    await new Promise((res) => setTimeout(res, 300 * (attempt + 1)));
   }
   throw new Error(lastErr || "ошибка");
 }
@@ -656,18 +669,38 @@ async function loadPhotos(number) {
         const idx = next++;
         const p = photos[idx];
         try {
-          const blob = await fetchPhotoBlob(p.id, headers);
           if (reqId !== photoReqId) return;
-          const src = URL.createObjectURL(blob);
-          photoUrls.push(src);
           const img = document.createElement("img");
-          img.src = src;
           img.alt = p.name || "";
           img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;";
-          img.onclick = () => openPhotoViewer(src);
           cells[idx].style.padding = "0";
           cells[idx].textContent = "";
           cells[idx].appendChild(img);
+          const direct = String(p.url || "").trim();
+          if (direct) {
+            img.src = direct;
+            img.onclick = () => openPhotoViewer(direct);
+            img.onerror = async function() {
+              img.onerror = null;
+              try {
+                const blob = await fetchPhotoBlob(p.id, headers);
+                if (reqId !== photoReqId) return;
+                const src = URL.createObjectURL(blob);
+                photoUrls.push(src);
+                img.src = src;
+                img.onclick = () => openPhotoViewer(src);
+              } catch (e) {
+                cells[idx].textContent = "Не удалось загрузить: " + ((e && e.message) || "ошибка");
+              }
+            };
+          } else {
+            const blob = await fetchPhotoBlob(p.id, headers);
+            if (reqId !== photoReqId) return;
+            const src = URL.createObjectURL(blob);
+            photoUrls.push(src);
+            img.src = src;
+            img.onclick = () => openPhotoViewer(src);
+          }
         } catch (e) {
           if (reqId !== photoReqId) return;
           cells[idx].textContent = "Не удалось загрузить: " + ((e && e.message) || "ошибка");
