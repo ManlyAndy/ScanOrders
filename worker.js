@@ -374,7 +374,8 @@ async function handleRouteComplete(request, auth, env) {
 }
 
 const PHOTO_MAX_PAGES = 20;
-const PHOTO_CACHE_TTL = 21600; // 6 часов
+const PHOTO_CACHE_TTL = 21600; // 6 часов — быстрый кэш результата поиска
+const PHOTO_FILE_CACHE_TTL = 2592000; // 30 дней — вспомогательная ссылка на файл
 const PHOTO_TIME_BUDGET_MS = 20000;
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -402,6 +403,70 @@ function splitResult(data) {
 }
 
 function msgId(m) { return Number(m.id || m.ID); }
+
+function photoIndexKey(number) { return "pi:" + String(number).trim(); }
+
+// Пытаемся достать именно данные файла из результата im.v2.File.upload.
+// API может вернуть объект или массив, поэтому разбираем несколько известных форматов,
+// но не принимаем произвольный message/chat id за id файла.
+function extractUploadedFiles(result, expectedNames) {
+  const names = new Set((expectedNames || []).map(function(x) { return String(x); }));
+  const out = new Map();
+  const seen = new Set();
+
+  function visit(v, depth) {
+    if (depth > 6 || v == null) return;
+    if (typeof v !== "object") return;
+    if (seen.has(v)) return;
+    seen.add(v);
+
+    if (Array.isArray(v)) {
+      v.forEach(function(x) { visit(x, depth + 1); });
+      return;
+    }
+
+    const id = v.id != null ? v.id : (v.ID != null ? v.ID : (v.fileId != null ? v.fileId : v.FILE_ID));
+    const name = v.name != null ? String(v.name) : (v.NAME != null ? String(v.NAME) : "");
+    const url = v.urlDownload || v.urlShow || v.DOWNLOAD_URL || v.downloadUrl || "";
+    const looksLikeFile = id != null && (/^\d+$/.test(String(id))) && (
+      names.has(name) || !!url || v.file != null || v.FILE != null || v.size != null || v.SIZE != null ||
+      v.contentType != null || v.CONTENT_TYPE != null
+    );
+    if (looksLikeFile) {
+      const sid = String(id);
+      if (!out.has(sid)) out.set(sid, { id: sid, name: name || "photo-" + sid, url: url || "" });
+    }
+
+    Object.keys(v).forEach(function(k) { visit(v[k], depth + 1); });
+  }
+
+  visit(result, 0);
+  return Array.from(out.values());
+}
+
+async function readPhotoIndex(env, number) {
+  if (!env.ROUTES) return null;
+  try {
+    const data = await env.ROUTES.get(photoIndexKey(number), { type: "json" });
+    if (data && Array.isArray(data.photos) && data.photos.length) return data;
+  } catch (e) { /* индекс недоступен */ }
+  return null;
+}
+
+async function writePhotoIndex(env, number, photos) {
+  if (!env.ROUTES || !Array.isArray(photos) || !photos.length) return;
+  const clean = [];
+  const seen = new Set();
+  for (let i = 0; i < photos.length; i++) {
+    const p = photos[i] || {};
+    const id = String(p.id || "");
+    if (!/^\d+$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    clean.push({ id: id, name: p.name || ("photo-" + id) });
+  }
+  if (!clean.length) return;
+  await env.ROUTES.put(photoIndexKey(number), JSON.stringify({ number: String(number), photos: clean, updatedAt: new Date().toISOString() }));
+}
 
 // Разбор пачки сообщений: ищем файлы, подпись которых относится к нужной отгрузке
 function processMessages(messages, filesById, ctx) {
@@ -446,17 +511,18 @@ async function findPhotoFiles(webhook, number, dbg, quick) {
   dbg.scanned = 0; dbg.withFiles = 0; dbg.withText = 0; dbg.steps = [];
 
   // 1) Поиск по тексту на стороне Битрикс — не зависит от глубины истории чата
-  const queries = [String(number), "Отгрузка № " + number, "Отгрузка №" + number];
+  // Один основной поиск по номеру покрывает оба исторических формата:
+  // «Отгрузка №29055 ...» и просто «28470».
+  // Дополнительные варианты запускаем только если основной поиск не дал фото.
+  const queries = [String(number), "Отгрузка №" + number];
   for (let q = 0; q < queries.length && !ctx.found.size; q++) {
-    if (q) await sleep(450);
     try {
       const data = await bitrixCall(webhook, "im.dialog.messages.search", {
         CHAT_ID: BITRIX_CHAT_ID, SEARCH_MESSAGE: queries[q], ORDER: { ID: "DESC" }, LIMIT: 200
       });
       const r = splitResult(data);
-      const p = processMessages(r.messages, r.filesById, ctx);
+      processMessages(r.messages, r.filesById, ctx);
       dbg.steps.push("поиск «" + queries[q] + "»: " + r.messages.length + " сообщ., найдено фото: " + ctx.found.size);
-      void p;
     } catch (e) {
       dbg.steps.push("поиск «" + queries[q] + "»: ошибка " + String((e && e.message) || e).slice(0, 80));
     }
@@ -465,15 +531,18 @@ async function findPhotoFiles(webhook, number, dbg, quick) {
   // сообщения с нужной подписью, но без файлов в выдаче поиска: достаём их отдельно
   if (!ctx.found.size && ctx.noFile.length) {
     const ids = ctx.noFile.slice(0, 8);
-    for (let k = 0; k < ids.length; k++) {
-      if (k) await sleep(450);
+    const results = await Promise.all(ids.map(async function(mid) {
       try {
-        const data = await bitrixCall(webhook, "im.dialog.messages.get", { DIALOG_ID: BITRIX_DIALOG_ID, LAST_ID: ids[k] + 1, LIMIT: 3 });
-        const r = splitResult(data);
-        const only = r.messages.filter(function(m) { return msgId(m) === ids[k]; });
-        ctx.seen.delete(ids[k]);
-        processMessages(only, r.filesById, ctx);
-      } catch (e) { /* пропускаем */ }
+        return await bitrixCall(webhook, "im.dialog.messages.get", { DIALOG_ID: BITRIX_DIALOG_ID, LAST_ID: mid + 1, LIMIT: 3 });
+      } catch (e) { return null; }
+    }));
+    for (let k = 0; k < results.length; k++) {
+      const data = results[k];
+      if (!data) continue;
+      const r = splitResult(data);
+      const only = r.messages.filter(function(m) { return msgId(m) === ids[k]; });
+      ctx.seen.delete(ids[k]);
+      processMessages(only, r.filesById, ctx);
     }
     dbg.steps.push("уточнено сообщений без файлов: " + ids.length + ", найдено фото: " + ctx.found.size);
   }
@@ -521,10 +590,16 @@ async function handlePhoto(url, auth, env) {
   const quick = url.searchParams.get("quick") === "1";
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
   const cacheKey = "pl:" + number;
+  // Постоянный индекс позволяет старой отгрузке открываться без повторного поиска по истории чата.
+  const indexed = await readPhotoIndex(env, number);
+  if (indexed) {
+    return json({ ok: true, number: number, photos: indexed.photos, indexed: true, cached: true, debug: {} });
+  }
   if (env.ROUTES) {
     try {
       const cached = await env.ROUTES.get(cacheKey, { type: "json" });
       if (cached && Array.isArray(cached.photos) && cached.photos.length) {
+        await writePhotoIndex(env, number, cached.photos);
         return json({ ok: true, number: number, photos: cached.photos, cached: true, debug: {} });
       }
     } catch (e) { /* без кеша */ }
@@ -534,8 +609,9 @@ async function handlePhoto(url, auth, env) {
     const files = await findPhotoFiles(webhook, number, dbg, quick);
     const photos = files.map(function(f) { return { id: f.id, name: f.name }; });
     if (env.ROUTES && files.length) {
+      await writePhotoIndex(env, number, photos);
       await Promise.all(files.map(function(f) {
-        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_CACHE_TTL + 3600 });
+        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
       }));
       await env.ROUTES.put(cacheKey, JSON.stringify({ photos: photos }), { expirationTtl: PHOTO_CACHE_TTL });
     }
@@ -550,7 +626,6 @@ async function handlePhotoFile(url, env) {
   if (!/^\d+$/.test(id)) return json({ error: "Неверный id" }, 400);
   if (!env.BITRIX_WEBHOOK_URL || !env.ROUTES) return json({ error: "Bitrix не настроен" }, 500);
   const allowed = await env.ROUTES.get("pf:" + id, { type: "json" });
-  if (!allowed) return json({ error: "Файл не найден, обновите отгрузку" }, 404);
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
 
   function isFile(r) {
@@ -560,7 +635,7 @@ async function handlePhotoFile(url, env) {
 
   let fileRes = null;
   let reason = "";
-  if (allowed.url) {
+  if (allowed && allowed.url) {
     try { fileRes = await fetch(new URL(allowed.url, webhook).href, { redirect: "follow" }); }
     catch (e) { fileRes = null; reason = "прямая ссылка недоступна"; }
   }
@@ -568,7 +643,10 @@ async function handlePhotoFile(url, env) {
     try {
       const info = await bitrixCall(webhook, "disk.file.get", { id: id });
       const dl = info.result && info.result.DOWNLOAD_URL;
-      if (dl) fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
+      if (dl) {
+        if (env.ROUTES) await env.ROUTES.put("pf:" + id, JSON.stringify({ url: dl }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+        fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
+      }
       else reason = "нет ссылки на файл";
     } catch (e) { fileRes = null; reason = String((e && e.message) || e).slice(0, 80); }
   }
@@ -622,7 +700,21 @@ async function handlePhotoUpload(request, auth, env) {
       fields: { name: name, content: p.content, message: caption }
     });
     uploaded++;
-    results.push({ name: name, result: data.result });
+    const uploadedFiles = extractUploadedFiles(data.result, [name]);
+    results.push({ name: name, result: data.result, files: uploadedFiles });
+  }
+
+  // Сразу сохраняем известные ID. Следующее открытие отгрузки вообще не обращается к истории чата.
+  const indexedPhotos = [];
+  for (let i = 0; i < results.length; i++) {
+    const files = Array.isArray(results[i].files) ? results[i].files : [];
+    for (let j = 0; j < files.length; j++) indexedPhotos.push(files[j]);
+  }
+  if (indexedPhotos.length) {
+    await writePhotoIndex(env, number, indexedPhotos);
+    await Promise.all(indexedPhotos.map(function(f) {
+      return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url || "" }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+    }));
   }
   return json({ ok: true, number: number, uploaded: uploaded, results: results });
 }
