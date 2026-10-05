@@ -145,29 +145,71 @@ function extractPlaces(row) {
   return value;
 }
 
+const KNOWN_TC_NAMES = [
+  "Деловые Линии", "Байкал", "ПЭК", "Новая Линия", "Мэджик Транс",
+  "Главтрасса", "НТК", "РТС", "Рейл континент", "Авангард",
+  "Витэка", "Транзит", "Сдэк"
+];
+const TC_ORDER = new Map(KNOWN_TC_NAMES.map(function(name, i) { return [name.toLowerCase(), i]; }));
+
+function normalizeText(s) {
+  return String(s || "")
+    .replace(/[«»“”"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractTCFromDescription(desc) {
-  if (!desc) return "";
-  const text = String(desc).replace(/[«»"'']/g, '"');
-  const lines = text.split(/\r?\n/);
-  const stopWords = ['до', 'в', 'по', 'на', 'от', 'для', 'терминала', 'терминалу', 'г.', 'г', 'получатель', 'плательщик', 'адрес', 'наб.', 'д.', 'корп.', 'кв.', 'тел.'];
-  for (let line of lines) {
-    line = line.trim();
-    // Важно: транспортная определяется только из отдельного поля/строки ТК.
-    // Например, «ТК Байкал» -> «Байкал», а «тест Байкал» -> без ТК.
-    const m = line.match(/^ТК\s*(?::|-)?\s*(.+)$/i);
-    if (!m) continue;
-    let tc = m[1].trim().replace(/^["']|["']$/g, '');
-    const words = tc.split(/\s+/);
-    const result = [];
-    for (const word of words) {
-      const cleanWord = word.replace(/["',.]/g, '');
-      if (stopWords.indexOf(cleanWord.toLowerCase()) >= 0) break;
-      if (cleanWord) result.push(cleanWord);
-    }
-    if (result.length) return result.slice(0, 3).join(' ');
+  const text = normalizeText(desc);
+  if (!text) return "";
+  // Триггер — именно название из справочника. "ТК", "ООО" и прочие приставки не обязательны.
+  for (let i = 0; i < KNOWN_TC_NAMES.length; i++) {
+    const name = KNOWN_TC_NAMES[i];
+    const re = new RegExp("(?:^|[^А-Яа-яЁёA-Za-z])" + escapeRegExp(name) + "(?:$|[^А-Яа-яЁёA-Za-z])", "i");
+    if (re.test(text)) return name;
   }
   return "";
 }
+
+function cleanClientCandidate(value) {
+  let s = normalizeText(value);
+  if (!s) return "";
+  // Убираем служебные подписи, но не трогаем само имя клиента.
+  s = s.replace(/^\s*(?:клиент|покупатель|получатель|заказчик|имя|название)\s*[:\-]\s*/i, "").trim();
+  for (let i = 0; i < KNOWN_TC_NAMES.length; i++) {
+    const name = KNOWN_TC_NAMES[i];
+    const re = new RegExp("(?:^|\s)(?:ТК\s+|ООО\s+)?" + escapeRegExp(name) + "(?:$|\s|[,;])", "ig");
+    s = s.replace(re, " ");
+  }
+  s = s.replace(/\s+/g, " ").replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "").trim();
+  return s;
+}
+
+function extractClientFromDescription(desc) {
+  const raw = String(desc || "").replace(/\r/g, "");
+  if (!raw.trim()) return "";
+  const lines = raw.split(/\n/).map(function(x) { return x.trim(); }).filter(Boolean);
+
+  // В первую очередь ищем явно подписанное поле клиента.
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(?:клиент|покупатель|получатель|заказчик|имя|название)\s*[:\-]\s*(.+)$/i);
+    if (m) {
+      const v = cleanClientCandidate(m[1]);
+      if (v) return v;
+    }
+  }
+
+  // Если подписи нет, используем первую содержательную строку текстового поля,
+  // убрав из неё название ТК. Это позволяет объединять одинаковые имена клиентов.
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^(?:тк|транспортная\s+компания|ооо)\s*[:\-]?\s*$/i.test(line)) continue;
+    const v = cleanClientCandidate(line);
+    if (v && !/^тк\b/i.test(v)) return v;
+  }
+  return "";
+}
+
 
 async function handleFind(url, auth) {
   const code = (url.searchParams.get("code") || "").trim();
@@ -201,6 +243,7 @@ async function handleFind(url, auth) {
     places: places,
     description: detail.description || "",
     tc: extractTCFromDescription(detail.description),
+    clientName: extractClientFromDescription(detail.description),
     stateName: stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
@@ -238,9 +281,10 @@ async function handleRouteDetails(request, auth) {
           places: extractPlaces(detail),
           description: detail.description || "",
           tc: extractTCFromDescription(detail.description),
+          clientName: extractClientFromDescription(detail.description),
           agentName: detail.agent && detail.agent.name ? detail.agent.name : ""
         };
-      } catch (e) { return { number: num, places: null, description: "", tc: "", agentName: "" }; }
+      } catch (e) { return { number: num, places: null, description: "", tc: "" }; }
     }));
     details.push.apply(details, batchResults);
     if (i + 10 < numbers.length) await new Promise(function(r) { setTimeout(r, 200); });
@@ -464,7 +508,7 @@ async function writePhotoIndex(env, number, photos) {
     const id = String(p.id || "");
     if (!/^\d+$/.test(id) || seen.has(id)) continue;
     seen.add(id);
-    clean.push({ id: id, name: p.name || ("photo-" + id) });
+    clean.push({ id: id, name: p.name || ("photo-" + id), url: p.url || "" });
   }
   if (!clean.length) return;
   await env.ROUTES.put(photoIndexKey(number), JSON.stringify({ number: String(number), photos: clean, updatedAt: new Date().toISOString() }));
@@ -487,7 +531,7 @@ function processMessages(messages, filesById, ctx) {
     const ids = collectFileIds(m);
     if (ids.length) dbg.withFiles++;
     const textOk = ctx.textRe.test(text);
-    const bareNumberOk = ctx.bareNumberRe.test(text);
+    const bareNumberOk = new RegExp("^\\s*" + escapeRegExp(ctx.number) + "\\s*$").test(text);
     if (textOk || bareNumberOk) dbg.withText++;
     if ((textOk || bareNumberOk) && !ids.length && ctx.noFile.indexOf(mid) < 0) ctx.noFile.push(mid);
     if (!ids.length) continue;
@@ -507,9 +551,8 @@ async function findPhotoFiles(webhook, number, dbg, quick) {
   const esc = escapeRegExp(number);
   const ctx = {
     textRe: new RegExp("отгрузк[а-я]*\\s*(?:№|#|no\\.?|n)?\\s*" + esc + "(?!\\d)", "i"),
-    bareNumberRe: new RegExp("^\\s*" + esc + "\\s*$"),
     nameRe: new RegExp("order-" + esc + "(?!\\d)", "i"),
-    found: new Map(), seen: new Set(), noFile: [], dbg: dbg
+    found: new Map(), seen: new Set(), noFile: [], dbg: dbg, number: String(number)
   };
   const t0 = Date.now();
   dbg.scanned = 0; dbg.withFiles = 0; dbg.withText = 0; dbg.steps = [];
@@ -611,7 +654,7 @@ async function handlePhoto(url, auth, env) {
   const dbg = {};
   try {
     const files = await findPhotoFiles(webhook, number, dbg, quick);
-    const photos = files.map(function(f) { return { id: f.id, name: f.name }; });
+    const photos = files.map(function(f) { return { id: f.id, name: f.name, url: f.url || "" }; });
     if (env.ROUTES && files.length) {
       await writePhotoIndex(env, number, photos);
       await Promise.all(files.map(function(f) {
@@ -695,17 +738,25 @@ async function handlePhotoUpload(request, auth, env) {
   const caption = "Отгрузка №" + number + (by ? " (загрузил: " + by + ")" : "");
   let uploaded = 0;
   const results = [];
-  for (let i = 0; i < photos.length; i++) {
-    const p = photos[i];
-    if (!p || !p.content) continue;
-    const name = String(p.name || ("order-" + number + "-" + (i + 1) + ".jpg")).replace(/[^a-zA-Z0-9А-Яа-я._-]/g, "_");
-    const data = await bitrixCall(webhook, "im.v2.File.upload", {
-      dialogId: BITRIX_DIALOG_ID,
-      fields: { name: name, content: p.content, message: caption }
-    });
-    uploaded++;
-    const uploadedFiles = extractUploadedFiles(data.result, [name]);
-    results.push({ name: name, result: data.result, files: uploadedFiles });
+  for (let base = 0; base < photos.length; base += 4) {
+    const batch = photos.slice(base, base + 4);
+    const batchResults = await Promise.all(batch.map(async function(p, off) {
+      const i = base + off;
+      if (!p || !p.content) return null;
+      const name = String(p.name || ("order-" + number + "-" + (i + 1) + ".jpg")).replace(/[^a-zA-Z0-9А-Яа-я._-]/g, "_");
+      const data = await bitrixCall(webhook, "im.v2.File.upload", {
+        dialogId: BITRIX_DIALOG_ID,
+        fields: { name: name, content: p.content, message: caption }
+      });
+      const uploadedFiles = extractUploadedFiles(data.result, [name]);
+      return { name: name, result: data.result, files: uploadedFiles };
+    }));
+    for (let i = 0; i < batchResults.length; i++) {
+      const item = batchResults[i];
+      if (!item) continue;
+      uploaded++;
+      results.push(item);
+    }
   }
 
   // Сразу сохраняем известные ID. Следующее открытие отгрузки вообще не обращается к истории чата.
