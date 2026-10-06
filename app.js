@@ -655,7 +655,7 @@ async function fetchPhotoBlob(photo, headers, number) {
   let lastErr = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(id)}`, { headers });
+      const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(id)}&number=${encodeURIComponent(number || "")}`, { headers });
       if (r.ok) return await r.blob();
       if (r.status === 401) { logout(); throw new Error("сессия"); }
       lastErr = "код " + r.status;
