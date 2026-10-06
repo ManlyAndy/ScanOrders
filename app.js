@@ -644,7 +644,7 @@ async function startPrewarm() {
 
   await Promise.all([worker(), worker(), worker()]);
 }
-async function fetchPhotoBlob(photo, headers) {
+async function fetchPhotoBlob(photo, headers, number) {
   if (photo && photo.url) {
     try {
       const direct = await fetch(photo.url, { redirect: "follow" });
@@ -721,7 +721,7 @@ async function loadPhotos(number) {
             img.onerror = async function() {
               img.onerror = null;
               try {
-                const blob = await fetchPhotoBlob(p.id, headers);
+                const blob = await fetchPhotoBlob({ id: p.id, url: p.url, name: p.name }, headers, number);
                 if (reqId !== photoReqId) return;
                 const src = URL.createObjectURL(blob);
                 photoUrls.push(src);
@@ -732,7 +732,7 @@ async function loadPhotos(number) {
               }
             };
           } else {
-            const blob = await fetchPhotoBlob(p.id, headers);
+            const blob = await fetchPhotoBlob({ id: p.id, url: p.url, name: p.name }, headers, number);
             if (reqId !== photoReqId) return;
             const src = URL.createObjectURL(blob);
             photoUrls.push(src);
