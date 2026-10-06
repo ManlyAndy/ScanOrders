@@ -502,7 +502,11 @@ async function readPhotoIndex(env, number) {
       }).map(function(p) {
         return { id: String(p.id), name: p.name || ("photo-" + p.id), url: p.url || "" };
       });
-      if (photos.length) return { number: String(number), photos: photos, updatedAt: data.updatedAt || "" };
+      if (photos.length && photos.every(function(p) { return !!p.url; })) {
+        return { number: String(number), photos: photos, updatedAt: data.updatedAt || "" };
+      }
+      // Старый индекс без URL считаем неполным: handlePhoto заново найдёт
+      // вложения чата и получит настоящий urlDownload/urlShow.
     }
   } catch (e) { /* индекс недоступен */ }
   return null;
@@ -658,13 +662,21 @@ async function handlePhoto(url, auth, env) {
   // Постоянный индекс позволяет старой отгрузке открываться без повторного поиска по истории чата.
   const indexed = await readPhotoIndex(env, number);
   if (indexed) {
+    if (env.ROUTES) {
+      await Promise.all(indexed.photos.map(function(f) {
+        return env.ROUTES.put("pf2:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+      }));
+    }
     return json({ ok: true, number: number, photos: indexed.photos, indexed: true, cached: true, debug: {} });
   }
   if (env.ROUTES) {
     try {
       const cached = await env.ROUTES.get(cacheKey, { type: "json" });
-      if (cached && Array.isArray(cached.photos) && cached.photos.length) {
+      if (cached && Array.isArray(cached.photos) && cached.photos.length && cached.photos.every(function(p) { return p && p.url; })) {
         await writePhotoIndex(env, number, cached.photos);
+        await Promise.all(cached.photos.map(function(f) {
+          return env.ROUTES.put("pf2:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+        }));
         return json({ ok: true, number: number, photos: cached.photos, cached: true, debug: {} });
       }
     } catch (e) { /* без кеша */ }
@@ -701,20 +713,39 @@ async function handlePhotoFile(url, env) {
   let fileRes = null;
   let reason = "";
   if (allowed && allowed.url) {
-    try { fileRes = await fetch(new URL(allowed.url, webhook).href, { redirect: "follow" }); }
-    catch (e) { fileRes = null; reason = "прямая ссылка недоступна"; }
-  }
-  if (!isFile(fileRes)) {
     try {
-      const info = await bitrixCall(webhook, "disk.file.get", { id: id });
-      const dl = info.result && info.result.DOWNLOAD_URL;
-      if (dl) {
-        if (env.ROUTES) await env.ROUTES.put("pf2:" + id, JSON.stringify({ url: dl }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
-        fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
-      }
-      else reason = "нет ссылки на файл";
-    } catch (e) { fileRes = null; reason = String((e && e.message) || e).slice(0, 80); }
+      fileRes = await fetch(new URL(allowed.url, webhook).href, { redirect: "follow" });
+    } catch (e) {
+      fileRes = null;
+      reason = "прямая ссылка недоступна";
+    }
   }
+
+  // ВАЖНО: id из im.dialog.messages.* — это ID вложения чата,
+  // а не Drive ID для disk.file.get. Поэтому disk.file.get здесь не вызываем.
+  // Если URL отсутствует/устарел, ищем сообщение по номеру и берём
+  // urlDownload/urlShow непосредственно из ответа чата.
+  if (!isFile(fileRes)) {
+    const number = (url.searchParams.get("number") || "").trim();
+    if (number) {
+      try {
+        const dbg = {};
+        const files = await findPhotoFiles(webhook, number, dbg, true, false);
+        const match = files.find(function(f) { return String(f.id) === id; }) || files[0];
+        if (match && match.url) {
+          await env.ROUTES.put("pf2:" + String(match.id), JSON.stringify({ url: match.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+          fileRes = await fetch(new URL(match.url, webhook).href, { redirect: "follow" });
+        } else {
+          reason = "URL файла не найден в сообщении чата";
+        }
+      } catch (e) {
+        reason = String((e && e.message) || e).slice(0, 120);
+      }
+    } else {
+      reason = "для восстановления ссылки нужен номер отгрузки";
+    }
+  }
+
   if (!isFile(fileRes)) return json({ error: "Не удалось получить файл" + (reason ? " (" + reason + ")" : "") }, 502);
   return new Response(fileRes.body, {
     status: 200,
