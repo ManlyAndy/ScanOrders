@@ -726,23 +726,50 @@ async function handlePhotoFile(url, env) {
   // Если URL отсутствует/устарел, ищем сообщение по номеру и берём
   // urlDownload/urlShow непосредственно из ответа чата.
   if (!isFile(fileRes)) {
+    // Для серверной загрузки chat-файла используем официальный метод
+    // im.v2.File.download. Он возвращает временный downloadUrl,
+    // предназначенный именно для скачивания через интеграцию.
+    try {
+      const dl = await bitrixCall(webhook, "im.v2.File.download", {
+        dialogId: BITRIX_DIALOG_ID,
+        fileId: Number(id)
+      });
+      const downloadUrl = dl && dl.result && (dl.result.downloadUrl || dl.result.urlDownload || dl.result.url || "");
+      if (downloadUrl) {
+        fileRes = await fetch(new URL(downloadUrl, webhook).href, { redirect: "follow" });
+      } else {
+        reason = "Bitrix не вернул ссылку на скачивание";
+      }
+    } catch (e) {
+      reason = String((e && e.message) || e).slice(0, 160);
+    }
+  }
+
+  // Если старый ID уже недействителен/не относится к найденному файлу,
+  // номер отгрузки остаётся дополнительным способом заново найти актуальный ID.
+  if (!isFile(fileRes)) {
     const number = (url.searchParams.get("number") || "").trim();
     if (number) {
       try {
         const dbg = {};
         const files = await findPhotoFiles(webhook, number, dbg, true, false);
         const match = files.find(function(f) { return String(f.id) === id; }) || files[0];
-        if (match && match.url) {
-          await env.ROUTES.put("pf2:" + String(match.id), JSON.stringify({ url: match.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
-          fileRes = await fetch(new URL(match.url, webhook).href, { redirect: "follow" });
-        } else {
-          reason = "URL файла не найден в сообщении чата";
+        if (match && /^\d+$/.test(String(match.id))) {
+          const dl = await bitrixCall(webhook, "im.v2.File.download", {
+            dialogId: BITRIX_DIALOG_ID,
+            fileId: Number(match.id)
+          });
+          const downloadUrl = dl && dl.result && (dl.result.downloadUrl || dl.result.urlDownload || dl.result.url || "");
+          if (downloadUrl) {
+            fileRes = await fetch(new URL(downloadUrl, webhook).href, { redirect: "follow" });
+          }
+          if (isFile(fileRes)) {
+            await env.ROUTES.put("pf2:" + String(match.id), JSON.stringify({ url: match.url || "" }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+          }
         }
       } catch (e) {
-        reason = String((e && e.message) || e).slice(0, 120);
+        reason = String((e && e.message) || e).slice(0, 160);
       }
-    } else {
-      reason = "для восстановления ссылки нужен номер отгрузки";
     }
   }
 
@@ -817,7 +844,7 @@ async function handlePhotoUpload(request, auth, env) {
   if (indexedPhotos.length) {
     await writePhotoIndex(env, number, indexedPhotos);
     await Promise.all(indexedPhotos.map(function(f) {
-      return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url || "" }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+      return env.ROUTES.put("pf2:" + f.id, JSON.stringify({ url: f.url || "" }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
     }));
   }
   return json({ ok: true, number: number, uploaded: uploaded, results: results });
