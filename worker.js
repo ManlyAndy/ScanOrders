@@ -423,6 +423,8 @@ const PHOTO_MAX_PAGES = 20;
 const PHOTO_CACHE_TTL = 21600; // 6 часов — быстрый кэш результата поиска
 const PHOTO_FILE_CACHE_TTL = 2592000; // 30 дней — вспомогательная ссылка на файл
 const PHOTO_TIME_BUDGET_MS = 20000;
+const PHOTO_WARM_MAX_PAGES = 10;
+const PHOTO_WARM_TIME_BUDGET_MS = 9000;
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
 function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
@@ -547,7 +549,7 @@ function processMessages(messages, filesById, ctx) {
   return { minId: minId, fresh: fresh };
 }
 
-async function findPhotoFiles(webhook, number, dbg, quick) {
+async function findPhotoFiles(webhook, number, dbg, quick, warm) {
   const esc = escapeRegExp(number);
   const ctx = {
     textRe: new RegExp("отгрузк[а-я]*\\s*(?:№|#|no\\.?|n)?\\s*" + esc + "(?!\\d)", "i"),
@@ -594,13 +596,17 @@ async function findPhotoFiles(webhook, number, dbg, quick) {
     dbg.steps.push("уточнено сообщений без файлов: " + ids.length + ", найдено фото: " + ctx.found.size);
   }
 
-  // 2) Запасной путь: постраничный просмотр истории чата (в быстром режиме прогрева пропускается)
-  if (!ctx.found.size && !quick) {
+  // 2) Запасной путь: постраничный просмотр истории чата.
+  // Для фонового прогрева тоже разрешён, но с меньшим бюджетом: он не блокирует интерфейс,
+  // а результат сохраняется в постоянный индекс для следующего открытия.
+  if (!ctx.found.size && (!quick || warm)) {
+    const maxPages = warm ? PHOTO_WARM_MAX_PAGES : PHOTO_MAX_PAGES;
+    const timeBudget = warm ? PHOTO_WARM_TIME_BUDGET_MS : PHOTO_TIME_BUDGET_MS;
     let lastId = 0;
     let mode = "LAST_ID";
     let pages = 0;
-    for (let page = 0; page < PHOTO_MAX_PAGES; page++) {
-      if (Date.now() - t0 > PHOTO_TIME_BUDGET_MS) { dbg.steps.push("история: остановил по времени"); break; }
+    for (let page = 0; page < maxPages; page++) {
+      if (Date.now() - t0 > timeBudget) { dbg.steps.push("история: остановил по времени"); break; }
       if (page) await sleep(450);
       const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
       if (lastId) payload[mode] = lastId;
@@ -635,6 +641,7 @@ async function handlePhoto(url, auth, env) {
   if (!number) return json({ error: "Не передан номер" }, 400);
   if (!env.BITRIX_WEBHOOK_URL) return json({ ok: false, error: "Bitrix не настроен", photos: [] }, 500);
   const quick = url.searchParams.get("quick") === "1";
+  const warm = url.searchParams.get("warm") === "1";
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
   const cacheKey = "pl:" + number;
   // Постоянный индекс позволяет старой отгрузке открываться без повторного поиска по истории чата.
@@ -653,7 +660,7 @@ async function handlePhoto(url, auth, env) {
   }
   const dbg = {};
   try {
-    const files = await findPhotoFiles(webhook, number, dbg, quick);
+    const files = await findPhotoFiles(webhook, number, dbg, quick, warm);
     const photos = files.map(function(f) { return { id: f.id, name: f.name, url: f.url || "" }; });
     if (env.ROUTES && files.length) {
       await writePhotoIndex(env, number, photos);
@@ -662,7 +669,7 @@ async function handlePhoto(url, auth, env) {
       }));
       await env.ROUTES.put(cacheKey, JSON.stringify({ photos: photos }), { expirationTtl: PHOTO_CACHE_TTL });
     }
-    return json({ ok: true, number: number, photos: photos, quick: quick, debug: dbg });
+    return json({ ok: true, number: number, photos: photos, quick: quick, warm: warm, debug: dbg });
   } catch (e) {
     return json({ ok: false, error: String((e && e.message) || e), photos: [], debug: dbg }, 502);
   }
