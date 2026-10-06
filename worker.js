@@ -452,7 +452,7 @@ function splitResult(data) {
 
 function msgId(m) { return Number(m.id || m.ID); }
 
-function photoIndexKey(number) { return "pi:" + String(number).trim(); }
+function photoIndexKey(number) { return "pi2:" + String(number).trim(); }
 
 // Пытаемся достать именно данные файла из результата im.v2.File.upload.
 // API может вернуть объект или массив, поэтому разбираем несколько известных форматов,
@@ -496,7 +496,14 @@ async function readPhotoIndex(env, number) {
   if (!env.ROUTES) return null;
   try {
     const data = await env.ROUTES.get(photoIndexKey(number), { type: "json" });
-    if (data && Array.isArray(data.photos) && data.photos.length) return data;
+    if (data && Array.isArray(data.photos) && data.photos.length) {
+      const photos = data.photos.filter(function(p) {
+        return p && /^\d+$/.test(String(p.id || ""));
+      }).map(function(p) {
+        return { id: String(p.id), name: p.name || ("photo-" + p.id), url: p.url || "" };
+      });
+      if (photos.length) return { number: String(number), photos: photos, updatedAt: data.updatedAt || "" };
+    }
   } catch (e) { /* индекс недоступен */ }
   return null;
 }
@@ -539,10 +546,14 @@ function processMessages(messages, filesById, ctx) {
     if (!ids.length) continue;
     for (let j = 0; j < ids.length; j++) {
       const fid = ids[j];
-      const f = filesById[fid] || {};
+      // В старых ответах Bitrix некоторые числовые ID относятся к сообщению/вложению,
+      // а не к Disk-файлу. Принимаем ID только если он подтверждён объектом files.
+      const f = filesById[fid];
+      if (!f) continue;
       const nameOk = ctx.nameRe.test(String(f.name || ""));
-      if ((textOk || nameOk) && !ctx.found.has(fid)) {
-        ctx.found.set(fid, { id: fid, name: f.name || ("photo-" + fid), url: f.urlDownload || f.urlShow || "", mid: mid });
+      const hasFileMeta = f.id != null && (f.urlDownload || f.urlShow || f.downloadUrl || f.size != null || f.contentType || f.name);
+      if ((textOk || nameOk) && hasFileMeta && !ctx.found.has(fid)) {
+        ctx.found.set(fid, { id: fid, name: f.name || ("photo-" + fid), url: f.urlDownload || f.urlShow || f.downloadUrl || "", mid: mid });
       }
     }
   }
@@ -643,7 +654,7 @@ async function handlePhoto(url, auth, env) {
   const quick = url.searchParams.get("quick") === "1";
   const warm = url.searchParams.get("warm") === "1";
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
-  const cacheKey = "pl:" + number;
+  const cacheKey = "pl2:" + number;
   // Постоянный индекс позволяет старой отгрузке открываться без повторного поиска по истории чата.
   const indexed = await readPhotoIndex(env, number);
   if (indexed) {
@@ -665,7 +676,7 @@ async function handlePhoto(url, auth, env) {
     if (env.ROUTES && files.length) {
       await writePhotoIndex(env, number, photos);
       await Promise.all(files.map(function(f) {
-        return env.ROUTES.put("pf:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+        return env.ROUTES.put("pf2:" + f.id, JSON.stringify({ url: f.url }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
       }));
       await env.ROUTES.put(cacheKey, JSON.stringify({ photos: photos }), { expirationTtl: PHOTO_CACHE_TTL });
     }
@@ -679,7 +690,7 @@ async function handlePhotoFile(url, env) {
   const id = (url.searchParams.get("id") || "").trim();
   if (!/^\d+$/.test(id)) return json({ error: "Неверный id" }, 400);
   if (!env.BITRIX_WEBHOOK_URL || !env.ROUTES) return json({ error: "Bitrix не настроен" }, 500);
-  const allowed = await env.ROUTES.get("pf:" + id, { type: "json" });
+  const allowed = await env.ROUTES.get("pf2:" + id, { type: "json" });
   const webhook = env.BITRIX_WEBHOOK_URL.replace(/\/$/, "");
 
   function isFile(r) {
@@ -698,7 +709,7 @@ async function handlePhotoFile(url, env) {
       const info = await bitrixCall(webhook, "disk.file.get", { id: id });
       const dl = info.result && info.result.DOWNLOAD_URL;
       if (dl) {
-        if (env.ROUTES) await env.ROUTES.put("pf:" + id, JSON.stringify({ url: dl }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
+        if (env.ROUTES) await env.ROUTES.put("pf2:" + id, JSON.stringify({ url: dl }), { expirationTtl: PHOTO_FILE_CACHE_TTL });
         fileRes = await fetch(new URL(dl, webhook).href, { redirect: "follow" });
       }
       else reason = "нет ссылки на файл";
