@@ -13,6 +13,8 @@ let photoReqId = 0;
 let photoUrls = [];
 let photoBusy = 0;
 let warmRunId = 0;
+const warmInFlight = new Map();
+const PHOTO_WARM_VERSION = 2;
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -35,7 +37,7 @@ function loadRouteFromStorage() {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw);
-    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, agentMap: data.agentMap || {}, clientMap: data.clientMap || {}, tcChecked: !!data.tcChecked, tcVersion: data.tcVersion || 0, warmed: data.warmed || [] };
+    return { date: data.date, type: data.type, numbers: data.numbers, tasks: data.tasks || [], scanned: new Set(data.scanned || []), tcMap: data.tcMap || {}, agentMap: data.agentMap || {}, clientMap: data.clientMap || {}, tcChecked: !!data.tcChecked, tcVersion: data.tcVersion || 0, warmed: data.warmed || [], warmVersion: data.warmVersion || 0 };
   } catch (e) {
     return null;
   }
@@ -57,6 +59,7 @@ function saveRouteToStorage(route) {
       tcChecked: !!route.tcChecked,
       tcVersion: 3,
       warmed: route.warmed || [],
+      warmVersion: PHOTO_WARM_VERSION,
     })
   );
 }
@@ -158,7 +161,7 @@ function renderModalList() {
     nums.forEach((num) => {
       const scanned = currentRoute.scanned.has(num);
       const tc = tcMap[num] || "Без ТК";
-      const client = agentMap[num] || "Без клиента";
+      const client = clientMap[num] || agentMap[num] || "Без клиента";
       if (!q && tc !== lastTc) {
         html += `<div style="margin-top:10px;padding:8px 4px;font-weight:800;font-size:15px;border-bottom:1px solid #ddd;">${escapeHtml(tc)}</div>`;
         lastTc = tc;
@@ -570,41 +573,76 @@ function isResultScreenActive() {
   const el = document.getElementById("screen-result");
   return !!(el && el.classList.contains("active"));
 }
+async function prewarmOne(route, num, runId) {
+  if (warmInFlight.has(num)) return warmInFlight.get(num);
+  const auth = getSavedAuth();
+  if (!auth) return null;
+  const promise = (async function () {
+    try {
+      const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(num)}&warm=1`, {
+        headers: { Authorization: auth },
+      });
+      if (res.status === 401) return { unauthorized: true, photos: [] };
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok !== false) {
+        const photos = Array.isArray(data.photos) ? data.photos : [];
+        // Не помечаем номер прогретым, если старый поиск ничего не нашёл:
+        // при следующем обновлении маршрута будет ещё одна попытка.
+        if (photos.length && currentRoute === route && runId === warmRunId) {
+          if (!Array.isArray(route.warmed)) route.warmed = [];
+          route.warmVersion = PHOTO_WARM_VERSION;
+          if (!route.warmed.includes(num)) route.warmed.push(num);
+          saveRouteToStorage(route);
+        }
+        return { unauthorized: false, photos: photos };
+      }
+      return { unauthorized: false, photos: [], failed: true };
+    } catch (e) {
+      return { unauthorized: false, photos: [], failed: true };
+    } finally {
+      warmInFlight.delete(num);
+    }
+  })();
+  warmInFlight.set(num, promise);
+  return promise;
+}
+
 async function startPrewarm() {
   if (!currentRoute || !getSavedAuth()) return;
   const route = currentRoute;
   const runId = ++warmRunId;
+  if (route.warmVersion !== PHOTO_WARM_VERSION) {
+    route.warmed = [];
+    route.warmVersion = PHOTO_WARM_VERSION;
+    saveRouteToStorage(route);
+  }
   if (!Array.isArray(route.warmed)) route.warmed = [];
   const warmed = new Set(route.warmed);
-  const queue = route.numbers.filter((n) => !route.scanned.has(n))
-    .concat(route.numbers.filter((n) => route.scanned.has(n)))
-    .filter((n) => !warmed.has(n));
+  const queue = route.numbers.filter((n) => !warmed.has(n));
   if (!queue.length) return;
-  let errors = 0;
-  for (const num of queue) {
-    if (runId !== warmRunId || currentRoute !== route || !getSavedAuth()) return;
-    while (isResultScreenActive() || photoBusy > 0) {
-      await sleepMs(500);
-      if (runId !== warmRunId || currentRoute !== route || !getSavedAuth()) return;
-    }
-    try {
-      const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(num)}&quick=1`, {
-        headers: { Authorization: getSavedAuth() },
-      });
-      if (res.status === 401) return;
-      if (res.ok) {
-        await res.json().catch(() => ({}));
-        route.warmed.push(num);
-        saveRouteToStorage(route);
-        errors = 0;
-      } else if (++errors >= 3) {
+
+  // Не останавливаем прогрев, когда логист открыл результат: прогрев идёт в фоне.
+  // Ограничиваем параллельность, чтобы не перегружать Bitrix и канал телефона.
+  const concurrency = 3;
+  let cursor = 0;
+  let unauthorized = false;
+
+  async function worker() {
+    while (!unauthorized && runId === warmRunId && currentRoute === route && getSavedAuth()) {
+      const index = cursor++;
+      if (index >= queue.length) return;
+      const num = queue[index];
+      const result = await prewarmOne(route, num, runId);
+      if (result && result.unauthorized) {
+        unauthorized = true;
         return;
       }
-    } catch (e) {
-      if (++errors >= 3) return;
+      // Небольшая пауза между задачами одного фонового воркера.
+      await sleepMs(250);
     }
-    await sleepMs(700);
   }
+
+  await Promise.all([worker(), worker(), worker()]);
 }
 async function fetchPhotoBlob(photo, headers) {
   if (photo && photo.url) {
