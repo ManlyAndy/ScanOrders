@@ -608,6 +608,9 @@ async function prewarmOne(route, num, runId) {
 }
 
 async function startPrewarm() {
+  // Восстановительный режим: временно выключаем фоновый прогрев,
+  // чтобы он не создавал параллельную нагрузку на Bitrix во время проверки фото.
+  return;
   if (!currentRoute || !getSavedAuth()) return;
   const route = currentRoute;
   const runId = ++warmRunId;
