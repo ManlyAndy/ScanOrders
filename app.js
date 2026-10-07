@@ -57,7 +57,7 @@ function saveRouteToStorage(route) {
       agentMap: route.agentMap || {},
       clientMap: route.clientMap || {},
       tcChecked: !!route.tcChecked,
-      tcVersion: 3,
+      tcVersion: 4,
       warmed: route.warmed || [],
       warmVersion: PHOTO_WARM_VERSION,
     })
@@ -90,7 +90,7 @@ function openRouteModal() {
   box.value = "";
   renderModalList();
   document.getElementById("route-modal").classList.add("active");
-  if (currentRoute.type === "ТК" && (!currentRoute.tcChecked || currentRoute.tcVersion !== 3 || !currentRoute.agentMap)) {
+  if (currentRoute.type === "ТК" && (!currentRoute.tcChecked || currentRoute.tcVersion !== 4 || !currentRoute.agentMap)) {
     refreshTcMap(null, true);
   }
 }
@@ -157,23 +157,17 @@ function renderModalList() {
   } else {
     let html = "";
     let lastTc = null;
-    let lastClient = null;
     nums.forEach((num) => {
       const scanned = currentRoute.scanned.has(num);
       const tc = tcMap[num] || "Без ТК";
       const client = clientMap[num] || agentMap[num] || "Без клиента";
+      // Название ТК используем для сортировки, но не показываем заголовком в приложении.
       if (!q && tc !== lastTc) {
-        html += `<div style="margin-top:10px;padding:8px 4px;font-weight:800;font-size:15px;border-bottom:1px solid #ddd;">${escapeHtml(tc)}</div>`;
         lastTc = tc;
-        lastClient = null;
       }
-      if (!q && client !== lastClient) {
-        html += `<div style="padding:7px 4px 4px;color:#666;font-weight:700;font-size:13px;">${escapeHtml(client)}</div>`;
-        lastClient = client;
-      }
-      const suffix = q ? ` <span style="color:#666;">— ${escapeHtml(tc)} · ${escapeHtml(client)}</span>` : "";
+      const suffix = q ? ` <span style="color:#666;">— ${escapeHtml(client)}</span>` : "";
       html += `<div class="modal-row ${scanned ? "scanned" : ""}" data-num="${escapeAttr(num)}" onclick="openFromList(this.dataset.num)" style="cursor:pointer;align-items:center;">
-        <span>№ ${escapeHtml(num)}${suffix}</span>
+        <span style="min-width:0;">№ ${escapeHtml(num)} <span style="color:#666;font-size:13px;font-weight:500;">${escapeHtml(client)}</span>${suffix}</span>
         <span><span class="check">${scanned ? "✓" : ""}</span><span style="color:#999;margin-left:10px;">›</span></span>
       </div>`;
     });
@@ -221,7 +215,7 @@ async function refreshTcMap(statusEl, force) {
       if (currentRoute === route) renderModalList();
     }
     route.tcChecked = true;
-    route.tcVersion = 3;
+    route.tcVersion = 4;
     saveRouteToStorage(route);
   } catch (e) {
     // ТК не загрузились — продолжим без них
@@ -259,7 +253,7 @@ async function loadRoute() {
       tcMap: {},
       agentMap: {},
       tcChecked: false,
-      tcVersion: 3,
+      tcVersion: 4,
       warmed: []
     };
     saveRouteToStorage();
