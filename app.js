@@ -542,7 +542,36 @@ function renderReady(data) {
     <div class="meta">Количество мест: <b>${escapeHtml(String(data.places ?? "—"))}</b></div>
     <div class="meta">Сумма: <b>${escapeHtml(String(data.sum))} ₽</b></div>
     ${statusText}
-  </div>`;
+  </div>
+  <button id="ship-current-btn" onclick="shipCurrentShipment()" style="width:100%;margin-top:12px;padding:15px 18px;border:0;border-radius:10px;background:#16803c;color:#fff;font-size:17px;font-weight:700;cursor:pointer;">Сменить статус</button>`;
+}
+async function shipCurrentShipment() {
+  const data = currentResult;
+  if (!data || !data.id || !data.ready) {
+    alert('Эта отгрузка сейчас не готова к отгрузке. Обновите карточку и проверьте статус.');
+    return;
+  }
+  const btn = document.getElementById('ship-current-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Меняю статус…'; btn.style.opacity = '0.7'; }
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/ship`, {
+      method: 'POST',
+      headers: { Authorization: getSavedAuth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: data.id })
+    });
+    if (res.status === 401) { logout(); return; }
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok || !result.ok) {
+      alert(result.error || 'Не удалось изменить статус в МойСклад.');
+      if (btn) { btn.disabled = false; btn.textContent = 'Сменить статус'; btn.style.opacity = '1'; }
+      return;
+    }
+    await lookupCode(String(data.name), openedFromList ? { fromList: true } : undefined);
+    alert('Отгрузка № ' + data.name + ' переведена в статус «Отгружено».');
+  } catch (e) {
+    alert('Не удалось связаться с МойСклад. Проверьте соединение и обновите карточку перед повторной попыткой.');
+    if (btn) { btn.disabled = false; btn.textContent = 'Сменить статус'; btn.style.opacity = '1'; }
+  }
 }
 function escapeHtml(str) {
   const d = document.createElement("div");
