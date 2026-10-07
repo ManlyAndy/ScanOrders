@@ -574,21 +574,23 @@ async function findPhotoFiles(webhook, number, dbg, quick, warm) {
   const t0 = Date.now();
   dbg.scanned = 0; dbg.withFiles = 0; dbg.withText = 0; dbg.steps = [];
 
-  // 1) Поиск по тексту на стороне Битрикс — не зависит от глубины истории чата
-  // Один основной поиск по номеру покрывает оба исторических формата:
-  // «Отгрузка №29055 ...» и просто «28470».
-  // Дополнительные варианты запускаем только если основной поиск не дал фото.
+  // 1) Поиск по тексту в Bitrix. Ошибка поиска не должна съедать бюджет истории.
   const queries = [String(number), "Отгрузка №" + number];
+  let searchSucceeded = false;
   for (let q = 0; q < queries.length && !ctx.found.size; q++) {
     try {
       const data = await bitrixCall(webhook, "im.dialog.messages.search", {
-        CHAT_ID: BITRIX_CHAT_ID, SEARCH_MESSAGE: queries[q], ORDER: { ID: "DESC" }, LIMIT: 200
+        CHAT_ID: BITRIX_CHAT_ID, SEARCH_MESSAGE: queries[q], ORDER: { ID: "DESC" }, LIMIT: 100
       });
+      searchSucceeded = true;
       const r = splitResult(data);
       processMessages(r.messages, r.filesById, ctx);
       dbg.steps.push("поиск «" + queries[q] + "»: " + r.messages.length + " сообщ., найдено фото: " + ctx.found.size);
     } catch (e) {
       dbg.steps.push("поиск «" + queries[q] + "»: ошибка " + String((e && e.message) || e).slice(0, 80));
+      // Если Bitrix вернул 520/таймаут, второй текстовый поиск обычно падает так же.
+      // Сразу переходим к истории, у которой теперь отдельный временной бюджет.
+      break;
     }
   }
 
@@ -615,24 +617,38 @@ async function findPhotoFiles(webhook, number, dbg, quick, warm) {
   // Для фонового прогрева тоже разрешён, но с меньшим бюджетом: он не блокирует интерфейс,
   // а результат сохраняется в постоянный индекс для следующего открытия.
   if (!ctx.found.size && (!quick || warm)) {
+    // Отдельный бюджет истории: сбои/задержки поискового API не должны его обнулять.
+    const historyStart = Date.now();
     const maxPages = warm ? PHOTO_WARM_MAX_PAGES : PHOTO_MAX_PAGES;
     const timeBudget = warm ? PHOTO_WARM_TIME_BUDGET_MS : PHOTO_TIME_BUDGET_MS;
     let lastId = 0;
     let mode = "LAST_ID";
     let pages = 0;
     for (let page = 0; page < maxPages; page++) {
-      if (Date.now() - t0 > timeBudget) { dbg.steps.push("история: остановил по времени"); break; }
+      if (Date.now() - historyStart > timeBudget) { dbg.steps.push("история: остановил по времени"); break; }
       if (page) await sleep(450);
       const payload = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50 };
       if (lastId) payload[mode] = lastId;
-      const data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
+      let data;
+      try {
+        data = await bitrixCall(webhook, "im.dialog.messages.get", payload);
+      } catch (e) {
+        dbg.steps.push("история: ошибка страницы " + (page + 1) + " — " + String((e && e.message) || e).slice(0, 100));
+        break;
+      }
       const r = splitResult(data);
       if (!r.messages.length) { dbg.steps.push("история: пусто на странице " + (page + 1)); break; }
       let p = processMessages(r.messages, r.filesById, ctx);
       if (!p.fresh && mode === "LAST_ID" && lastId) {
         // LAST_ID не двигает историю — пробуем FIRST_ID
         const alt = { DIALOG_ID: BITRIX_DIALOG_ID, LIMIT: 50, FIRST_ID: lastId };
-        const data2 = await bitrixCall(webhook, "im.dialog.messages.get", alt);
+        let data2;
+        try {
+          data2 = await bitrixCall(webhook, "im.dialog.messages.get", alt);
+        } catch (e) {
+          dbg.steps.push("история: ошибка FIRST_ID — " + String((e && e.message) || e).slice(0, 100));
+          break;
+        }
         const r2 = splitResult(data2);
         const p2 = processMessages(r2.messages, r2.filesById, ctx);
         if (p2.fresh) { mode = "FIRST_ID"; p = p2; dbg.steps.push("история: переключился на FIRST_ID"); }
@@ -752,7 +768,7 @@ async function handlePhotoFile(url, env) {
     if (number) {
       try {
         const dbg = {};
-        const files = await findPhotoFiles(webhook, number, dbg, true, false);
+        const files = await findPhotoFiles(webhook, number, dbg, false, false);
         const match = files.find(function(f) { return String(f.id) === id; }) || files[0];
         if (match && /^\d+$/.test(String(match.id))) {
           const dl = await bitrixCall(webhook, "im.v2.File.download", {
@@ -785,15 +801,31 @@ async function handlePhotoFile(url, env) {
 
 async function bitrixCall(webhook, method, payload, attempt) {
   attempt = attempt || 0;
-  const r = await fetch(webhook + "/" + method, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const data = await r.json().catch(function() { return {}; });
+  const controller = new AbortController();
+  const timer = setTimeout(function() { controller.abort(); }, 7000);
+  let r;
+  let data = {};
+  try {
+    r = await fetch(webhook + "/" + method, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    data = await r.json().catch(function() { return {}; });
+  } catch (e) {
+    clearTimeout(timer);
+    if (attempt < 1) {
+      await new Promise(function(res) { setTimeout(res, 350); });
+      return bitrixCall(webhook, method, payload, attempt + 1);
+    }
+    throw new Error(e && e.name === "AbortError" ? "Bitrix timeout (7 c)" : String((e && e.message) || e));
+  }
+  clearTimeout(timer);
   const code = String(data.error || "");
-  if ((code === "QUERY_LIMIT_EXCEEDED" || r.status === 429 || r.status === 503) && attempt < 3) {
-    await new Promise(function(res) { setTimeout(res, 700 * (attempt + 1)); });
+  const transient = [429, 500, 502, 503, 504, 520, 522, 524].includes(r.status) || code === "QUERY_LIMIT_EXCEEDED";
+  if (transient && attempt < 1) {
+    await new Promise(function(res) { setTimeout(res, 500); });
     return bitrixCall(webhook, method, payload, attempt + 1);
   }
   if (!r.ok || data.error) throw new Error(data.error_description || data.error || "Bitrix " + r.status);
