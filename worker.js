@@ -162,13 +162,22 @@ function normalizeText(s) {
 function extractTCFromDescription(desc) {
   const text = normalizeText(desc);
   if (!text) return "";
-  // Триггер — именно название из справочника. "ТК", "ООО" и прочие приставки не обязательны.
+  // Сначала ищем полное название из справочника — это исключает неоднозначные совпадения.
   for (let i = 0; i < KNOWN_TC_NAMES.length; i++) {
     const name = KNOWN_TC_NAMES[i];
     const re = new RegExp("(?:^|[^А-Яа-яЁёA-Za-z])" + escapeRegExp(name) + "(?:$|[^А-Яа-яЁёA-Za-z])", "i");
     if (re.test(text)) return name;
   }
-  return "";
+  // Разрешаем короткую запись первого слова, если она однозначно указывает на ТК:
+  // например, «Мэджик» -> «Мэджик Транс».
+  const words = text.match(/[А-Яа-яЁёA-Za-z]+/g) || [];
+  const matches = KNOWN_TC_NAMES.filter(function(name) {
+    const firstWord = name.split(/\s+/)[0];
+    return words.some(function(word) {
+      return word.toLocaleLowerCase("ru") === firstWord.toLocaleLowerCase("ru") && firstWord.length >= 4;
+    });
+  });
+  return matches.length === 1 ? matches[0] : "";
 }
 
 function cleanClientCandidate(value) {
@@ -243,7 +252,7 @@ async function handleFind(url, auth) {
     places: places,
     description: detail.description || "",
     tc: extractTCFromDescription(detail.description),
-    clientName: extractClientFromDescription(detail.description),
+    clientName: detail.agent && detail.agent.name ? detail.agent.name : "",
     stateName: stateName,
     ready: stateName === STATUS_READY_NAME,
     alreadyShipped: stateName === STATUS_SHIPPED_NAME
@@ -281,7 +290,7 @@ async function handleRouteDetails(request, auth) {
           places: extractPlaces(detail),
           description: detail.description || "",
           tc: extractTCFromDescription(detail.description),
-          clientName: extractClientFromDescription(detail.description),
+          clientName: detail.agent && detail.agent.name ? detail.agent.name : "",
           agentName: detail.agent && detail.agent.name ? detail.agent.name : ""
         };
       } catch (e) { return { number: num, places: null, description: "", tc: "" }; }
