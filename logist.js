@@ -109,25 +109,170 @@ async function sendRoute() {
 }
 
 function printRoute() {
-  if (!lastSentRoute) return;
-  var esc = function(v) { return String(v || "").replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); };
-  var r = lastSentRoute;
-  var groups = {};
-  r.items.forEach(function(d) { var tc = d.tc || "Без ТК"; if (!groups[tc]) groups[tc] = []; groups[tc].push(d); });
-  var sortedTCs = Object.keys(groups).sort();
-  var itemsHtml = "";
-  sortedTCs.forEach(function(tc) {
-    itemsHtml += "<h2 style='margin-top:20px;background:#e8f4f8;padding:10px;border-left:4px solid #007bff;font-size:14px;'>" + esc(tc) + " (" + groups[tc].length + " отгрузок)</h2>";
-    itemsHtml += "<table style='margin-bottom:16px;'><thead><tr><th style='width:90px;'>Отгрузка</th><th style='width:60px;'>Мест</th><th>Описание</th></tr></thead><tbody>";
-    groups[tc].forEach(function(d) { var desc = d.description || ""; itemsHtml += "<tr><td>№ " + esc(d.number) + "</td><td style='text-align:center;'>" + (d.places !== null && d.places !== undefined ? d.places : "—") + "</td><td>" + (desc.length > 0 ? esc(desc) : "—") + "</td></tr>"; });
-    itemsHtml += "</tbody></table>";
-  });
-  var tasks = r.tasks.length ? r.tasks.map(function(t) { return "<li>" + esc(t) + "</li>"; }).join("") : "<li>Нет заданий</li>";
-  var w = window.open("", "_blank");
-  if (!w) { alert("Разрешите всплывающие окна."); return; }
-  w.document.write("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Маршрут " + esc(r.label) + "</title><style>@page{margin:10mm;size:A4 landscape}body{font-family:Arial,sans-serif;padding:10px;font-size:11px}h1{font-size:16px;margin:0 0 4px}.meta{color:#555;margin-bottom:12px;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:5px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0;font-weight:700}h2{font-size:13px;margin:14px 0 6px}ul{margin:0;padding-left:20px}@media print{body{padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}}</style></head><body><h1>Маршрут: " + esc(r.label) + "</h1><div class=\"meta\">Дата: " + esc(r.date) + "</div>" + itemsHtml + "<h2>Дополнительные задания</h2><ul>" + tasks + "</ul><script>window.onload=function(){window.print();}<\/script></body></html>");
-  w.document.close();
+if (!lastSentRoute) return;
+
+var esc = function(v) {
+return String(v == null ? "" : v).replace(/[&<>"']/g, function(c) {
+return {
+"&": "&",
+"<": "<",
+">": ">",
+'"': """,
+"'": "'"
+}[c];
+});
+};
+
+var r = lastSentRoute;
+var groups = {};
+
+// Приводим название ТК к единому виду для группировки и сортировки.
+var knownTCs = [
+"Деловые Линии",
+"Байкал",
+"ПЭК",
+"Новая Линия",
+"Мэджик Транс",
+"Главтрасса",
+"НТК",
+"РТС",
+"Рейл континент",
+"Авангард",
+"Витэка",
+"Транзит",
+"Сдэк"
+];
+
+function normalizeTC(value) {
+var raw = String(value || "")
+.replace(/^(?:\s*(?:ТК|Т.К.|ООО)\s*)+/i, "")
+.replace(/\s+/g, " ")
+.trim();
+
+```
+if (!raw) return "Без ТК";
+
+var lower = raw.toLocaleLowerCase("ru-RU");
+
+// Сначала ищем полное название или его начало.
+var matches = knownTCs.filter(function(name) {
+  var n = name.toLocaleLowerCase("ru-RU");
+  return n === lower || n.indexOf(lower) === 0 ||
+    lower.indexOf(n) === 0;
+});
+
+// Если найдено однозначное совпадение, используем полное имя.
+if (matches.length === 1) return matches[0];
+
+// Дополнительно ищем известное название внутри текста.
+matches = knownTCs.filter(function(name) {
+  return lower.indexOf(name.toLocaleLowerCase("ru-RU")) !== -1;
+});
+
+if (matches.length === 1) return matches[0];
+
+return raw;
+```
+
 }
+
+r.items.forEach(function(d) {
+var tc = normalizeTC(d.tc);
+if (!groups[tc]) groups[tc] = [];
+groups[tc].push(d);
+});
+
+var sortedTCs = Object.keys(groups).sort(function(a, b) {
+return a.localeCompare(b, "ru");
+});
+
+var itemsHtml = "";
+
+sortedTCs.forEach(function(tc) {
+// Сортируем отгрузки по клиенту, затем по номеру.
+groups[tc].sort(function(a, b) {
+var clientA = String(a.clientName || a.agentName || "").toLocaleLowerCase("ru-RU");
+var clientB = String(b.clientName || b.agentName || "").toLocaleLowerCase("ru-RU");
+
+```
+  var cmp = clientA.localeCompare(clientB, "ru");
+  if (cmp !== 0) return cmp;
+
+  return String(a.number || "").localeCompare(String(b.number || ""), "ru", {
+    numeric: true
+  });
+});
+
+itemsHtml +=
+  "<h2>" + esc(tc) + " (" + groups[tc].length + " отгрузок)</h2>";
+
+itemsHtml +=
+  "<table><thead><tr>" +
+  "<th style='width:90px'>Отгрузка</th>" +
+  "<th style='width:60px'>Мест</th>" +
+  "<th style='width:220px'>Клиент</th>" +
+  "<th>Описание</th>" +
+  "</tr></thead><tbody>";
+
+groups[tc].forEach(function(d) {
+  var client = d.clientName || d.agentName || "";
+  var desc = d.description || "";
+
+  itemsHtml +=
+    "<tr>" +
+    "<td>№ " + esc(d.number) + "</td>" +
+    "<td style='text-align:center'>" +
+      esc(d.places == null ? "—" : d.places) +
+    "</td>" +
+    "<td>" + esc(client || "—") + "</td>" +
+    "<td>" + esc(desc || "—") + "</td>" +
+    "</tr>";
+});
+
+itemsHtml += "</tbody></table>";
+```
+
+});
+
+var taskList = Array.isArray(r.tasks) ? r.tasks : [];
+var tasks = taskList.length
+? taskList.map(function(t) {
+return "<li>" + esc(t) + "</li>";
+}).join("")
+: "<li>Нет заданий</li>";
+
+var w = window.open("", "_blank");
+if (!w) {
+alert("Разрешите всплывающие окна.");
+return;
+}
+
+w.document.write(
+"<!DOCTYPE html><html><head><meta charset='utf-8'>" +
+"<title>Маршрут " + esc(r.label) + "</title>" +
+"<style>" +
+"@page { size: A4 portrait; margin: 10mm; }" +
+"body { font-family: Arial, sans-serif; font-size: 11px; }" +
+"h1 { font-size: 16px; margin: 0 0 4px; }" +
+".meta { color: #555; margin-bottom: 12px; font-size: 12px; }" +
+"h2 { font-size: 13px; margin: 14px 0 6px; background: #e8f4f8; padding: 7px; }" +
+"table { border-collapse: collapse; width: 100%; margin-bottom: 16px; table-layout: fixed; }" +
+"th, td { border: 1px solid #999; padding: 5px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }" +
+"th { background: #f0f0f0; }" +
+"ul { margin: 0; padding-left: 20px; }" +
+"@media print { tr { page-break-inside: avoid; } }" +
+"</style></head><body>" +
+"<h1>Маршрут: " + esc(r.label) + "</h1>" +
+"<div class='meta'>Дата: " + esc(r.date) + "</div>" +
+itemsHtml +
+"<h2>Дополнительные задания</h2><ul>" + tasks + "</ul>" +
+"<script>window.onload=function(){window.print();}</script>" +
+"</body></html>"
+);
+
+w.document.close();
+}
+
 
 async function showHistoryForDate() {
   var date = document.getElementById("history-date").value;
