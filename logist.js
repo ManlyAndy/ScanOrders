@@ -183,14 +183,43 @@ async function sendRoute() {
   }
 }
 
-function printRoute() {
+// Места, описание и контрагент по номерам (пачками, лимит воркера 100 номеров за запрос)
+async function fetchRouteDetails(numbers) {
+  const map = {};
+  for (let i = 0; i < numbers.length; i += 50) {
+    const chunk = numbers.slice(i, i + 50);
+    try {
+      const res = await fetch(`${CONFIG.PROXY_URL}/route/details`, {
+        method: "POST",
+        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+        body: JSON.stringify({ numbers: chunk }),
+      });
+      if (res.status === 401) { logout(); return map; }
+      if (!res.ok) continue;
+      const data = await res.json();
+      (data.details || []).forEach((d) => { map[String(d.number)] = d; });
+    } catch (e) { /* печатаем без этих данных */ }
+  }
+  return map;
+}
+
+async function printRoute() {
   if (!lastSentRoute) return;
-  const esc = (v) => String(v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const r = lastSentRoute;
-  const items = r.numbers.map((n, i) => `<tr><td>${i + 1}</td><td>№ ${esc(n)}</td></tr>`).join("");
-  const tasks = r.tasks.length ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
   const w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return; }
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left}ol,ul{line-height:1.6}@media print{body{padding:10mm}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div><h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\\/script></body></html>`);
+  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные для печати…</p>");
+
+  const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const details = await fetchRouteDetails(r.numbers);
+
+  const items = r.numbers.map((n, i) => {
+    const d = details[String(n)] || {};
+    return `<tr><td>${i + 1}</td><td>№ ${esc(n)}</td><td>${esc(d.agentName || d.clientName || d.counterparty || "")}</td><td>${esc(d.places == null ? "" : d.places)}</td><td>${esc(d.description || "")}</td></tr>`;
+  }).join("");
+  const tasks = r.tasks.length ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
+
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}ol,ul{line-height:1.6}@media print{body{padding:10mm}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div><h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th><th>Контрагент</th><th>Места</th><th>Описание</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
