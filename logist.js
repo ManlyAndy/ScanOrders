@@ -78,12 +78,6 @@ async function doLogin() {
     errEl.textContent = "Нет соединения с сервером. Проверьте PROXY_URL в config.js";
   }
 }
-
-  localStorage.setItem("sklad_auth", authHeader);
-  document.getElementById("screen-login").style.display = "none";
-  document.getElementById("screen-main").style.display = "block";
-}
-
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("pdf-file").addEventListener("change", handleFile);
 });
