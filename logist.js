@@ -8,6 +8,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 let parsedNumbers = [];
 let routeTasks = [];
 let lastSentRoute = null;
+let currentFileName = "";
 
 function getSavedAuth() {
   const token = localStorage.getItem("sklad_token");
@@ -78,14 +79,145 @@ async function doLogin() {
     errEl.textContent = "Нет соединения с сервером. Проверьте PROXY_URL в config.js";
   }
 }
+
+// ---------- Проверка имени файла: тип маршрута и дата должны совпадать с выбранными ----------
+const LATIN_TO_CYR = { A:"А", B:"В", C:"С", E:"Е", H:"Н", K:"К", M:"М", O:"О", P:"Р", S:"С", T:"Т", X:"Х" };
+function normalizeToken(t) {
+  return String(t).toUpperCase().replace(/[A-Z]/g, (c) => LATIN_TO_CYR[c] || c);
+}
+function routeTypeFromFilename(name) {
+  const base = String(name || "").replace(/\.[^.]*$/, "");
+  const tokens = base.split(/[^A-Za-zА-Яа-яЁё0-9]+/).filter(Boolean).map(normalizeToken);
+  const types = { "МСК": "МСК", "ТК": "ТК", "НАЙМ": "Найм" };
+  const found = [];
+  tokens.forEach((t) => { if (types[t] && found.indexOf(types[t]) < 0) found.push(types[t]); });
+  return found;
+}
+function pad2(n) { return String(n).padStart(2, "0"); }
+function datesFromFilename(name) {
+  const base = String(name || "").replace(/\.[^.]*$/, "");
+  const out = [];
+  let m;
+  // без lookbehind — он не поддерживается в старых версиях Safari на iPhone
+  const reIsoLike = /(?:^|\D)(\d{4})[-._](\d{1,2})[-._](\d{1,2})(?!\d)/g;
+  while ((m = reIsoLike.exec(base)) !== null) out.push(`${m[1]}-${pad2(m[2])}-${pad2(m[3])}`);
+  const reRu = /(?:^|\D)(\d{1,2})[-._](\d{1,2})[-._](\d{4}|\d{2})(?!\d)/g;
+  while ((m = reRu.exec(base)) !== null) {
+    const y = m[3].length === 2 ? "20" + m[3] : m[3];
+    out.push(`${y}-${pad2(m[2])}-${pad2(m[1])}`);
+  }
+  return out;
+}
+function fileMismatchMessage() {
+  if (!currentFileName) return "";
+  const date = document.getElementById("route-date").value;
+  const label = document.getElementById("route-label").value.trim();
+  const types = routeTypeFromFilename(currentFileName);
+  if (types.length && types.indexOf(label) < 0) {
+    return `Файл «${currentFileName}» относится к маршруту «${types.join(", ")}», а выбран тип «${label}». Выберите нужный тип или другой файл.`;
+  }
+  const dates = datesFromFilename(currentFileName);
+  if (dates.length && dates.indexOf(date) < 0) {
+    return `В названии файла «${currentFileName}» указана дата ${dates.join(", ")}, а выбрана ${date}. Исправьте дату или выберите другой файл.`;
+  }
+  return "";
+}
+// Показывает/скрывает кнопку отправки в зависимости от совпадения файла и выбранных значений
+function refreshSendState() {
+  const sendBtn = document.getElementById("send-btn");
+  const statusEl = document.getElementById("parse-status");
+  if (!parsedNumbers.length) return;
+  const msg = fileMismatchMessage();
+  if (msg) {
+    sendBtn.style.display = "none";
+    statusEl.innerHTML = `<span class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">⛔ ${msg.replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}</span>`;
+  } else {
+    sendBtn.style.display = "block";
+    statusEl.innerHTML = `<span class="ok-msg">Найдено номеров: ${parsedNumbers.length}</span>`;
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("pdf-file").addEventListener("change", handleFile);
+  document.getElementById("route-date").addEventListener("change", refreshSendState);
+  document.getElementById("route-label").addEventListener("change", refreshSendState);
+  addRouteManageButtons();
 });
+
+// Кнопки "Очистить" (до отправки) и "Удалить маршрут" (после отправки)
+function addRouteManageButtons() {
+  const anchor = document.getElementById("send-result");
+  if (!anchor || document.getElementById("manage-box")) return;
+  const box = document.createElement("div");
+  box.id = "manage-box";
+  box.style.marginTop = "10px";
+  box.innerHTML =
+    '<button class="btn-secondary" id="clear-btn" style="background:rgba(255,255,255,0.2);color:white;">Очистить</button>' +
+    '<button class="btn-secondary" id="delete-route-btn" style="background:rgba(231,76,60,0.9);color:white;">Удалить маршрут</button>';
+  anchor.insertAdjacentElement("beforebegin", box);
+  document.getElementById("clear-btn").addEventListener("click", clearForm);
+  document.getElementById("delete-route-btn").addEventListener("click", deleteRoute);
+}
+
+function clearForm() {
+  parsedNumbers = [];
+  routeTasks = [];
+  lastSentRoute = null;
+  currentFileName = "";
+  document.getElementById("pdf-file").value = "";
+  document.getElementById("parse-status").textContent = "";
+  document.getElementById("preview-card").style.display = "none";
+  document.getElementById("preview-chips").innerHTML = "";
+  document.getElementById("task-preview").textContent = "";
+  document.getElementById("send-result").textContent = "";
+  document.getElementById("send-btn").style.display = "none";
+  document.getElementById("task-btn").style.display = "none";
+  document.getElementById("print-btn").style.display = "none";
+}
+
+async function deleteRoute() {
+  const date = document.getElementById("route-date").value;
+  const label = document.getElementById("route-label").value.trim();
+  const resultEl = document.getElementById("send-result");
+  if (!date || !label) return;
+  const headers = { Authorization: getSavedAuth(), "Content-Type": "application/json" };
+
+  try {
+    // Сколько отгрузок сейчас в этом маршруте
+    const g = await fetch(`${CONFIG.PROXY_URL}/route?date=${encodeURIComponent(date)}`, { headers });
+    if (g.status === 401) { logout(); return; }
+    const gd = await g.json().catch(() => ({}));
+    const have = (gd.items || []).filter((it) => it.label === label).length;
+    if (!have) {
+      resultEl.innerHTML = `<p class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Маршрута «${label}» на ${date} нет — удалять нечего.</p>`;
+      return;
+    }
+    if (!confirm(`Удалить маршрут «${label}» на ${date}?\nБудет удалено отгрузок: ${have}. Остальные маршруты этого дня не изменятся. Действие нельзя отменить.`)) return;
+
+    resultEl.textContent = "Удаляю…";
+    const res = await fetch(`${CONFIG.PROXY_URL}/route/delete`, {
+      method: "POST", headers, body: JSON.stringify({ date, label }),
+    });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json().catch(() => ({}));
+    if (data.ok) {
+      lastSentRoute = null;
+      document.getElementById("print-btn").style.display = "none";
+      resultEl.innerHTML = `<p class="ok-msg">Маршрут «${label}» на ${date} удалён (отгрузок: ${data.removed}). Осталось на этот день в других маршрутах: ${data.count}.</p>`;
+    } else {
+      resultEl.innerHTML = `<p class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">${data.error || "Не удалось удалить маршрут"}</p>`;
+    }
+  } catch (e) {
+    resultEl.innerHTML = '<p class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Нет соединения с сервером.</p>';
+  }
+}
 
 async function handleFile(e) {
   const file = e.target.files[0];
   if (!file) return;
 
+  currentFileName = file.name || "";
+  parsedNumbers = [];
   const statusEl = document.getElementById("parse-status");
   statusEl.textContent = "Читаю файл…";
   document.getElementById("preview-card").style.display = "none";
@@ -131,6 +263,7 @@ async function handleFile(e) {
     document.getElementById("preview-card").style.display = "block";
     document.getElementById("task-btn").style.display = "inline-block";
     document.getElementById("send-btn").style.display = "block";
+    refreshSendState();
   } catch (e) {
     statusEl.innerHTML = '<span class="error">Не удалось прочитать PDF. Убедитесь, что файл не повреждён.</span>';
   }
@@ -160,6 +293,12 @@ async function sendRoute() {
   const date = document.getElementById("route-date").value;
   const label = document.getElementById("route-label").value.trim();
   const resultEl = document.getElementById("send-result");
+  const mismatch = fileMismatchMessage();
+  if (mismatch) {
+    refreshSendState();
+    alert(mismatch);
+    return;
+  }
   resultEl.textContent = "Отправляю…";
 
   try {
@@ -174,7 +313,7 @@ async function sendRoute() {
     if (data.ok) {
       lastSentRoute = { date, label, numbers: [...parsedNumbers], tasks: [...routeTasks] };
       document.getElementById("print-btn").style.display = "inline-block";
-      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок: ${data.count}. Заданий: ${routeTasks.length}.</p>`;
+      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок в этом маршруте: ${parsedNumbers.length}${data.count != null && data.count !== parsedNumbers.length ? ` (всего за день по всем маршрутам: ${data.count})` : ""}. Заданий: ${routeTasks.length}.</p>`;
     } else {
       resultEl.innerHTML = `<p class="error">${data.error || "Не удалось отправить маршрут"}</p>`;
     }
