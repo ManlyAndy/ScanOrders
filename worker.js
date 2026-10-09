@@ -428,6 +428,31 @@ async function handleRouteComplete(request, auth, env) {
   return json({ ok: true, date: date, label: label, completedAt: completedRoutes[label].completedAt });
 }
 
+async function handleRouteDelete(request, auth, env) {
+  if (!env.ROUTES) return json({ error: "Хранилище не подключено" }, 500);
+  if (!(await verifyAuth(auth))) return unauthorized();
+  const body = await request.json();
+  const date = String(body.date || "").trim();
+  const label = String(body.label || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !label) return json({ error: "Неверные данные" }, 400);
+  const key = routeKey(date);
+  const data = await env.ROUTES.get(key, { type: "json" });
+  if (!data || !Array.isArray(data.items)) return json({ error: "Маршрутов на эту дату нет" }, 404);
+  const kept = data.items.filter(function(item) { return item.label !== label; });
+  const removed = data.items.length - kept.length;
+  if (!removed) return json({ error: "Маршрута «" + label + "» на эту дату нет" }, 404);
+  const tasksByLabel = Object.assign({}, data.tasksByLabel || {});
+  delete tasksByLabel[label];
+  const completedRoutes = Object.assign({}, data.completedRoutes || {});
+  delete completedRoutes[label];
+  if (!kept.length) {
+    await env.ROUTES.delete(key);
+  } else {
+    await env.ROUTES.put(key, JSON.stringify({ date: data.date, items: kept, tasksByLabel: tasksByLabel, completedRoutes: completedRoutes }), { expirationTtl: ROUTE_TTL });
+  }
+  return json({ ok: true, date: date, label: label, removed: removed, count: kept.length });
+}
+
 const PHOTO_MAX_PAGES = 20;
 const PHOTO_CACHE_TTL = 21600; // 6 часов — быстрый кэш результата поиска
 const PHOTO_FILE_CACHE_TTL = 2592000; // 30 дней — вспомогательная ссылка на файл
@@ -929,6 +954,10 @@ export default {
       if (url.pathname === "/route/complete" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "Нет прав" }, 403);
         return await handleRouteComplete(request, auth, env);
+      }
+      if (url.pathname === "/route/delete" && request.method === "POST") {
+        if (!isAllowedRouteLogin(username)) return json({ error: "Нет прав" }, 403);
+        return await handleRouteDelete(request, auth, env);
       }
       if (url.pathname === "/photo" && request.method === "GET") return await handlePhoto(url, auth, env);
       if (url.pathname === "/photo/file" && request.method === "GET") return await handlePhotoFile(url, env);
