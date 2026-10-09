@@ -22,6 +22,13 @@ window.addEventListener("load", () => {
   }
 });
 
+function logout() {
+  localStorage.removeItem("sklad_token");
+  localStorage.removeItem("sklad_user");
+  document.getElementById("screen-login").style.display = "block";
+  document.getElementById("screen-main").style.display = "none";
+}
+
 async function doLogin() {
   const login = document.getElementById("login-user").value.trim();
   const pass = document.getElementById("login-pass").value;
