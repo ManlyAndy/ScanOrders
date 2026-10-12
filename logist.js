@@ -192,7 +192,7 @@ async function deleteRoute() {
       resultEl.innerHTML = `<p class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Маршрута «${label}» на ${date} нет — удалять нечего.</p>`;
       return;
     }
-    if (!confirm(`Удалить маршрут «${label}» на ${date}?\nБудет удалено отгрузок: ${have}. Остальные маршруты этого дня не изменятся. Действие нельзя отменить.`)) return;
+    if (!confirm(`Удалить маршрут «${label}» на ${date}?\nБудет удалено отгрузок: ${have}. Остальные маршруты не изменятся. Действие нельзя отменить.`)) return;
 
     resultEl.textContent = "Удаляю…";
     const res = await fetch(`${CONFIG.PROXY_URL}/route/delete`, {
@@ -251,7 +251,7 @@ async function handleFile(e) {
     parsedNumbers = Array.from(found);
 
     if (!parsedNumbers.length) {
-      statusEl.innerHTML = '<span class="error">Не удалось найти номера отгрузок в этом файле. Проверьте, что это именно "Список отгрузок" из МойСклад.</span>';
+      statusEl.innerHTML = '<span class="error">Не удалось найти номера отгрузок в этом файле.</span>';
       return;
     }
 
@@ -265,7 +265,7 @@ async function handleFile(e) {
     document.getElementById("send-btn").style.display = "block";
     refreshSendState();
   } catch (e) {
-    statusEl.innerHTML = '<span class="error">Не удалось прочитать PDF. Убедитесь, что файл не повреждён.</span>';
+    statusEl.innerHTML = '<span class="error">Не удалось прочитать PDF.</span>';
   }
 }
 
@@ -313,7 +313,7 @@ async function sendRoute() {
     if (data.ok) {
       lastSentRoute = { date, label, numbers: [...parsedNumbers], tasks: [...routeTasks] };
       document.getElementById("print-btn").style.display = "inline-block";
-      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок в этом маршруте: ${parsedNumbers.length}${data.count != null && data.count !== parsedNumbers.length ? ` (всего за день по всем маршрутам: ${data.count})` : ""}. Заданий: ${routeTasks.length}.</p>`;
+      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок в маршруте: ${parsedNumbers.length}${data.count != null && data.count !== parsedNumbers.length ? ` (всего за день по всем маршрутам: ${data.count})` : ""}. Заданий: ${routeTasks.length}.</p>`;
     } else {
       resultEl.innerHTML = `<p class="error">${data.error || "Не удалось отправить маршрут"}</p>`;
     }
@@ -347,7 +347,7 @@ async function printRoute() {
   const r = lastSentRoute;
   const w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return; }
-  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные для печати…</p>");
+  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные…</p>");
 
   const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const details = await fetchRouteDetails(r.numbers);
