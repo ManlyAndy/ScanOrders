@@ -12,12 +12,46 @@ let tcLoading = false;
 let photoReqId = 0;
 let photoUrls = [];
 let photoBusy = 0;
+const APP_BUILD = "date-picker-1";
 let warmRunId = 0;
 const warmInFlight = new Map();
 const PHOTO_WARM_VERSION = 2;
 
+function localToday() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+// Рабочая дата маршрута: по умолчанию сегодня (местное время), можно выбрать другую (например, завтра)
+let selectedDate = null;
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return selectedDate || localToday();
+}
+function ensureDatePicker() {
+  const st = document.getElementById("route-status");
+  if (!st) return;
+  let inp = document.getElementById("route-date-pick");
+  if (!inp) {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "margin:8px 0;display:flex;align-items:center;gap:8px;";
+    wrap.innerHTML = '<span style="font-size:14px;">Дата маршрута:</span>' +
+      '<input type="date" id="route-date-pick" style="padding:8px;font-size:16px;border:1px solid #ddd;border-radius:8px;">';
+    st.parentNode.insertBefore(wrap, st);
+    inp = wrap.querySelector("input");
+    inp.addEventListener("change", function () {
+      selectedDate = inp.value && inp.value !== localToday() ? inp.value : null;
+      if (!inp.value) inp.value = localToday();
+      currentRoute = loadRouteFromStorage();
+      renderRouteStatus();
+      updateLoadButtonText();
+    });
+  }
+  if (!inp.value) inp.value = todayStr();
+  updateLoadButtonText();
+}
+function updateLoadButtonText() {
+  const btn = document.querySelector('button[onclick="loadRoute()"]');
+  if (!btn) return;
+  btn.textContent = selectedDate ? "Загрузить маршрут на " + selectedDate : "Загрузить маршрут на сегодня";
 }
 function routeStorageKey(type) {
   return "sklad_route_" + todayStr() + "_" + (type || selectedRouteType);
@@ -234,14 +268,14 @@ async function loadRoute() {
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
     if (!data.found) {
-      el.textContent = "Логист ещё не загрузил маршрут на сегодня";
+      el.textContent = "Логист ещё не загрузил маршрут на " + todayStr();
       return;
     }
     const filteredNumbers = (data.items || [])
       .filter((it) => it.label === selectedRouteType)
       .map((it) => it.number);
     if (!filteredNumbers.length) {
-      el.textContent = `На сегодня нет загруженного маршрута типа "${selectedRouteType}"`;
+      el.textContent = `На ${todayStr()} нет загруженного маршрута типа "${selectedRouteType}"`;
       return;
     }
     currentRoute = {
@@ -351,6 +385,7 @@ function logout() {
   show("login");
 }
 function enterScanScreen() {
+  ensureDatePicker();
   document.getElementById("who-label").textContent = getSavedUser();
   currentRoute = loadRouteFromStorage();
   renderRouteStatus();
@@ -602,7 +637,7 @@ async function prewarmOne(route, num, runId) {
   if (!auth) return null;
   const promise = (async function () {
     try {
-      const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(num)}&warm=1`, {
+      const res = await fetch(`${CONFIG.PROXY_URL}/photo?number=${encodeURIComponent(num)}&quick=1`, {
         headers: { Authorization: auth },
       });
       if (res.status === 401) return { unauthorized: true, photos: [] };
@@ -846,6 +881,7 @@ async function finishRoute() {
 
 // ---------- СТАРТ ----------
 window.addEventListener("load", () => {
+  ensureDatePicker();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
