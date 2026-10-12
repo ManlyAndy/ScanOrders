@@ -1,3 +1,7 @@
+// ===========================================================
+// Логика страницы логиста: вход, разбор PDF, отправка маршрута
+// ===========================================================
+
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
@@ -13,6 +17,8 @@ function getSavedAuth() {
 
 window.addEventListener("load", () => {
   document.getElementById("route-date").valueAsDate = new Date();
+  const hd = document.getElementById("history-date");
+  if (hd) hd.value = localDateStr();
   if (getSavedAuth()) {
     document.getElementById("screen-login").style.display = "none";
     document.getElementById("screen-main").style.display = "block";
@@ -188,7 +194,7 @@ async function deleteRoute() {
       resultEl.innerHTML = `<p class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Маршрута «${label}» на ${date} нет — удалять нечего.</p>`;
       return;
     }
-    if (!confirm(`Удалить маршрут «${label}» на ${date}?\nБудет удалено отгрузок: ${have}. Остальные маршруты не изменятся. Действие нельзя отменить.`)) return;
+    if (!confirm(`Удалить маршрут «${label}» на ${date}?\nБудет удалено отгрузок: ${have}. Остальные маршруты этого дня не изменятся. Действие нельзя отменить.`)) return;
 
     resultEl.textContent = "Удаляю…";
     const res = await fetch(`${CONFIG.PROXY_URL}/route/delete`, {
@@ -247,7 +253,7 @@ async function handleFile(e) {
     parsedNumbers = Array.from(found);
 
     if (!parsedNumbers.length) {
-      statusEl.innerHTML = '<span class="error">Не удалось найти номера отгрузок в этом файле.</span>';
+      statusEl.innerHTML = '<span class="error">Не удалось найти номера отгрузок в этом файле. Проверьте, что это именно "Список отгрузок" из МойСклад.</span>';
       return;
     }
 
@@ -261,7 +267,7 @@ async function handleFile(e) {
     document.getElementById("send-btn").style.display = "block";
     refreshSendState();
   } catch (e) {
-    statusEl.innerHTML = '<span class="error">Не удалось прочитать PDF.</span>';
+    statusEl.innerHTML = '<span class="error">Не удалось прочитать PDF. Убедитесь, что файл не повреждён.</span>';
   }
 }
 
@@ -309,7 +315,7 @@ async function sendRoute() {
     if (data.ok) {
       lastSentRoute = { date, label, numbers: [...parsedNumbers], tasks: [...routeTasks] };
       document.getElementById("print-btn").style.display = "inline-block";
-      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок в маршруте: ${parsedNumbers.length}${data.count != null && data.count !== parsedNumbers.length ? ` (всего за день по всем маршрутам: ${data.count})` : ""}. Заданий: ${routeTasks.length}.</p>`;
+      resultEl.innerHTML = `<p class="ok-msg">Готово! Маршрут "${label}" на ${date} сохранён. Отгрузок в этом маршруте: ${parsedNumbers.length}${data.count != null && data.count !== parsedNumbers.length ? ` (всего за день по всем маршрутам: ${data.count})` : ""}. Заданий: ${routeTasks.length}.</p>`;
     } else {
       resultEl.innerHTML = `<p class="error">${data.error || "Не удалось отправить маршрут"}</p>`;
     }
@@ -318,11 +324,12 @@ async function sendRoute() {
   }
 }
 
-// Места, описание и контрагент по номерам (пачками, лимит воркера 100 номеров за запрос)
-async function fetchRouteDetails(numbers) {
+// Места, описание, ТК, контрагент и статус по номерам.
+// Пачки по 20: на каждый номер воркер делает 2 запроса к МойСклад, а лимит подзапросов один запрос к воркеру ограничен.
+async function fetchRouteDetails(numbers, onChunk) {
   const map = {};
-  for (let i = 0; i < numbers.length; i += 50) {
-    const chunk = numbers.slice(i, i + 50);
+  for (let i = 0; i < numbers.length; i += 20) {
+    const chunk = numbers.slice(i, i + 20);
     try {
       const res = await fetch(`${CONFIG.PROXY_URL}/route/details`, {
         method: "POST",
@@ -333,9 +340,24 @@ async function fetchRouteDetails(numbers) {
       if (!res.ok) continue;
       const data = await res.json();
       (data.details || []).forEach((d) => { map[String(d.number)] = d; });
-    } catch (e) { /* печатаем без этих данных */ }
+      if (onChunk) onChunk(map);
+    } catch (e) { /* без этих данных */ }
   }
   return map;
+}
+
+// Сортировка: ТК (по алфавиту, без ТК в конце), внутри ТК клиент, затем номер отгрузки
+function sortRouteRows(rows) {
+  const cmp = (a, b) => String(a).localeCompare(String(b), "ru", { sensitivity: "base", numeric: true });
+  return rows.sort((a, b) => {
+    if (a.tc !== b.tc) {
+      if (!a.tc) return 1;
+      if (!b.tc) return -1;
+      return cmp(a.tc, b.tc);
+    }
+    if (a.client !== b.client) return cmp(a.client, b.client);
+    return cmp(a.n, b.n);
+  });
 }
 
 async function printRoute() {
@@ -343,12 +365,11 @@ async function printRoute() {
   const r = lastSentRoute;
   const w = window.open("", "_blank");
   if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return; }
-  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные…</p>");
+  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные для печати…</p>");
 
   const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const details = await fetchRouteDetails(r.numbers);
 
-  // Сортировка: ТК (по алфавиту, без ТК в конце), внутри ТК клиент, затем номер отгрузки
   const rows = r.numbers.map((n) => {
     const d = details[String(n)] || {};
     return {
@@ -359,22 +380,129 @@ async function printRoute() {
       description: d.description || "",
     };
   });
-  const cmp = (a, b) => String(a).localeCompare(String(b), "ru", { sensitivity: "base", numeric: true });
-  rows.sort((a, b) => {
-    if (a.tc !== b.tc) {
-      if (!a.tc) return 1;
-      if (!b.tc) return -1;
-      return cmp(a.tc, b.tc);
-    }
-    if (a.client !== b.client) return cmp(a.client, b.client);
-    return cmp(a.n, b.n);
-  });
+  sortRouteRows(rows);
   const items = rows.map((x, i) =>
     `<tr><td>${i + 1}</td><td>№ ${esc(x.n)}</td><td>${esc(x.tc)}</td><td>${esc(x.client)}</td><td>${esc(x.places)}</td><td>${esc(x.description)}</td></tr>`
   ).join("");
   const tasks = r.tasks.length ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
 
   w.document.open();
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}ol,ul{line-height:1.6}@media print{body{padding:10mm}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div><h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th><th>ТК</th><th>Контрагент</th><th>Места</th><th>Описание</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\/script></body></html>`);
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}ol,ul{line-height:1.6}@media print{body{padding:0}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div><h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th><th>ТК</th><th>Контрагент</th><th>Места</th><th>Описание</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
+}
+
+
+// ---------- История маршрутов ----------
+let historyReqId = 0;
+
+function localDateStr(d) {
+  d = d || new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function escHtml(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function statusBadgeHtml(stateName) {
+  if (!stateName) return "";
+  let cls = "status-other";
+  if (stateName === "Отгружено") cls = "status-shipped";
+  else if (stateName === "Собрано") cls = "status-ready";
+  return `<span class="status-badge ${cls}">${escHtml(stateName)}</span>`;
+}
+function formatDoneTime(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  } catch (e) { return ""; }
+}
+
+async function showHistoryForDate() {
+  const date = document.getElementById("history-date").value;
+  const listEl = document.getElementById("history-list");
+  if (!date) { listEl.innerHTML = '<p class="hint">Выберите дату.</p>'; return; }
+  const reqId = ++historyReqId;
+  listEl.innerHTML = '<p class="hint">Загружаю маршруты…</p>';
+
+  let data;
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${encodeURIComponent(date)}`, {
+      headers: { Authorization: getSavedAuth() },
+    });
+    if (res.status === 401) { logout(); return; }
+    data = await res.json().catch(() => ({}));
+    if (reqId !== historyReqId) return;
+    if (!res.ok) {
+      listEl.innerHTML = `<p class="error">${escHtml(data.error || "Не удалось загрузить маршруты")}</p>`;
+      return;
+    }
+  } catch (e) {
+    if (reqId !== historyReqId) return;
+    listEl.innerHTML = '<p class="error">Нет соединения с сервером.</p>';
+    return;
+  }
+
+  const items = Array.isArray(data.items) ? data.items : [];
+  if (!data.found || !items.length) {
+    listEl.innerHTML = `<p class="hint">На ${escHtml(date)} маршрутов нет.</p>`;
+    return;
+  }
+
+  // группировка по типу маршрута: МСК, ТК, Найм, затем остальные
+  const groups = {};
+  items.forEach((it) => { (groups[it.label] = groups[it.label] || []).push(String(it.number)); });
+  const preferred = ["МСК", "ТК", "Найм"];
+  const labels = preferred.filter((l) => groups[l]).concat(Object.keys(groups).filter((l) => preferred.indexOf(l) < 0));
+  const completed = (data.completedRoutes && typeof data.completedRoutes === "object") ? data.completedRoutes : {};
+  const allNumbers = items.map((it) => String(it.number));
+
+  function render(details, loading) {
+    let html = `<div class="hint">Дата: ${escHtml(date)}. Отгрузок всего: ${allNumbers.length}.` +
+      (loading ? " Загружаю контрагентов и статусы…" : "") + "</div>";
+    labels.forEach((label) => {
+      const nums = groups[label];
+      const done = completed[label];
+      const scannedSet = new Set(done && Array.isArray(done.scanned) ? done.scanned.map(String) : []);
+      const rows = sortRouteRows(nums.map((n) => {
+        const d = details[n] || {};
+        return {
+          n: n,
+          tc: (d.tc || "").trim(),
+          client: (d.agentName || d.clientName || d.counterparty || "").trim(),
+          state: d.stateName || "",
+          scanned: scannedSet.has(n),
+        };
+      }));
+
+      const counts = {};
+      rows.forEach((r) => { if (r.state) counts[r.state] = (counts[r.state] || 0) + 1; });
+      const summary = Object.keys(counts).map((k) => `${escHtml(k)}: ${counts[k]}`).join(" · ");
+
+      const doneBadge = done
+        ? `<span class="status-badge status-shipped">Закрыт ${escHtml(formatDoneTime(done.completedAt))} · отсканировано ${scannedSet.size} из ${nums.length}</span>`
+        : '<span class="status-badge status-other">Не закрыт</span>';
+
+      const body = rows.map((r) => {
+        const meta = [r.tc, r.client].filter(Boolean).map(escHtml).join(" · ");
+        return `<div style="padding:6px 0;border-top:1px solid #eee;font-size:14px;">` +
+          `№ ${escHtml(r.n)}` +
+          (meta ? ` <span style="color:#666;">— ${meta}</span>` : "") +
+          (r.scanned ? ' <span style="color:#2ecc71;font-weight:700;">✓</span>' : "") +
+          statusBadgeHtml(r.state) +
+          `</div>`;
+      }).join("");
+
+      html += `<div class="history-item">` +
+        `<div class="history-date">${escHtml(label)} — отгрузок: ${nums.length} ${doneBadge}</div>` +
+        (summary ? `<div class="history-labels">${summary}</div>` : "") +
+        `<div style="margin-top:6px;">${body}</div></div>`;
+    });
+    listEl.innerHTML = html;
+  }
+
+  render({}, true);
+  const details = await fetchRouteDetails(allNumbers, (partial) => {
+    if (reqId === historyReqId) render(partial, true);
+  });
+  if (reqId === historyReqId) render(details, false);
 }
