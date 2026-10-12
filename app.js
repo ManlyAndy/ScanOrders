@@ -631,9 +631,6 @@ async function prewarmOne(route, num, runId) {
 }
 
 async function startPrewarm() {
-  // Восстановительный режим: временно выключаем фоновый прогрев,
-  // чтобы он не создавал параллельную нагрузку на Bitrix во время проверки фото.
-  return;
   if (!currentRoute || !getSavedAuth()) return;
   const route = currentRoute;
   const runId = ++warmRunId;
@@ -671,12 +668,6 @@ async function startPrewarm() {
   await Promise.all([worker(), worker(), worker()]);
 }
 async function fetchPhotoBlob(photo, headers, number) {
-  if (photo && photo.url) {
-    try {
-      const direct = await fetch(photo.url, { redirect: "follow" });
-      if (direct.ok) return await direct.blob();
-    } catch (e) {}
-  }
   const id = photo && photo.id;
   let lastErr = "";
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -740,31 +731,12 @@ async function loadPhotos(number) {
           cells[idx].style.padding = "0";
           cells[idx].textContent = "";
           cells[idx].appendChild(img);
-          const direct = String(p.url || "").trim();
-          if (direct) {
-            img.src = direct;
-            img.onclick = () => openPhotoViewer(direct);
-            img.onerror = async function() {
-              img.onerror = null;
-              try {
-                const blob = await fetchPhotoBlob({ id: p.id, url: p.url, name: p.name }, headers, number);
-                if (reqId !== photoReqId) return;
-                const src = URL.createObjectURL(blob);
-                photoUrls.push(src);
-                img.src = src;
-                img.onclick = () => openPhotoViewer(src);
-              } catch (e) {
-                cells[idx].textContent = "Не удалось загрузить: " + ((e && e.message) || "ошибка");
-              }
-            };
-          } else {
-            const blob = await fetchPhotoBlob({ id: p.id, url: p.url, name: p.name }, headers, number);
-            if (reqId !== photoReqId) return;
-            const src = URL.createObjectURL(blob);
-            photoUrls.push(src);
-            img.src = src;
-            img.onclick = () => openPhotoViewer(src);
-          }
+          const blob = await fetchPhotoBlob({ id: p.id, name: p.name }, headers, number);
+          if (reqId !== photoReqId) return;
+          const src = URL.createObjectURL(blob);
+          photoUrls.push(src);
+          img.src = src;
+          img.onclick = () => openPhotoViewer(src);
         } catch (e) {
           if (reqId !== photoReqId) return;
           cells[idx].textContent = "Не удалось загрузить: " + ((e && e.message) || "ошибка");
