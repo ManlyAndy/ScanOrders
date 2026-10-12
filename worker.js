@@ -291,7 +291,8 @@ async function handleRouteDetails(request, auth) {
           description: detail.description || "",
           tc: extractTCFromDescription(detail.description),
           clientName: detail.agent && detail.agent.name ? detail.agent.name : "",
-          agentName: detail.agent && detail.agent.name ? detail.agent.name : ""
+          agentName: detail.agent && detail.agent.name ? detail.agent.name : "",
+          stateName: detail.state && detail.state.name ? detail.state.name : ""
         };
       } catch (e) { return { number: num, places: null, description: "", tc: "" }; }
     }));
