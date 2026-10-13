@@ -5,6 +5,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
+const APP_BUILD = "print-any-date-2";
 let parsedNumbers = [];
 let routeTasks = [];
 let lastSentRoute = null;
@@ -396,13 +397,45 @@ function sortRouteRows(rows) {
   });
 }
 
+function openPrintWindow() {
+  const w = window.open("", "_blank");
+  if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return null; }
+  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные для печати…</p>");
+  return w;
+}
+
+// Печать только что отправленного маршрута
 async function printRoute() {
   if (!lastSentRoute) return;
-  const r = lastSentRoute;
-  const w = window.open("", "_blank");
-  if (!w) { alert("Разрешите всплывающие окна для печати маршрута."); return; }
-  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Загружаю данные для печати…</p>");
+  const w = openPrintWindow();
+  if (!w) return;
+  await renderPrint(w, lastSentRoute);
+}
 
+// Печать любого сохранённого маршрута на выбранную дату (может печатать любой логист)
+async function printSavedRoute(date, label) {
+  if (!date || !label) return;
+  const w = openPrintWindow();
+  if (!w) return;
+  try {
+    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${encodeURIComponent(date)}`, {
+      headers: { Authorization: getSavedAuth() },
+    });
+    if (res.status === 401) { w.close(); logout(); return; }
+    const data = await res.json().catch(() => ({}));
+    const numbers = (data.items || []).filter((it) => it.label === label).map((it) => String(it.number));
+    if (!res.ok || !numbers.length) {
+      w.document.body.innerHTML = "<p style='font-family:Arial;padding:28px'>Маршрута «" + escHtml(label) + "» на " + escHtml(date) + " нет.</p>";
+      return;
+    }
+    const tasks = (data.tasksByLabel && Array.isArray(data.tasksByLabel[label])) ? data.tasksByLabel[label] : [];
+    await renderPrint(w, { date, label, numbers, tasks });
+  } catch (e) {
+    w.document.body.innerHTML = "<p style='font-family:Arial;padding:28px'>Не удалось загрузить маршрут. Проверьте соединение.</p>";
+  }
+}
+
+async function renderPrint(w, r) {
   const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const details = await fetchRouteDetails(r.numbers);
 
@@ -529,7 +562,8 @@ async function showHistoryForDate() {
       }).join("");
 
       html += `<div class="history-item">` +
-        `<div class="history-date">${escHtml(label)} — отгрузок: ${nums.length} ${doneBadge}</div>` +
+        `<div class="history-date">${escHtml(label)} — отгрузок: ${nums.length} ${doneBadge} ` +
+        `<button class="btn-secondary" style="width:auto;display:inline-block;padding:4px 10px;margin:0 0 0 6px;font-size:13px;" data-date="${escHtml(date)}" data-label="${escHtml(label)}" onclick="printSavedRoute(this.dataset.date,this.dataset.label)">🖨 Печать</button></div>` +
         (summary ? `<div class="history-labels">${summary}</div>` : "") +
         `<div style="margin-top:6px;">${body}</div></div>`;
     });
@@ -541,4 +575,23 @@ async function showHistoryForDate() {
     if (reqId === historyReqId) render(partial, true);
   });
   if (reqId === historyReqId) render(details, false);
-} 
+}
+
+// Отдельная панель печати рядом с выбором даты истории: не зависит от списка ниже
+function addPrintAnyDatePanel() {
+  const hd = document.getElementById("history-date");
+  if (!hd || document.getElementById("print-any-panel")) return;
+  const panel = document.createElement("div");
+  panel.id = "print-any-panel";
+  panel.style.cssText = "margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+  panel.innerHTML =
+    '<select id="print-any-label" style="padding:10px;font-size:16px;border-radius:8px;border:1px solid #ddd;">' +
+    '<option value="МСК">МСК</option><option value="ТК">ТК</option><option value="Найм">Найм</option></select>' +
+    '<button type="button" id="print-any-btn" class="btn-secondary" style="width:auto;padding:10px 14px;margin:0;">🖨 Печать маршрута на эту дату</button>';
+  (hd.parentNode || document.body).insertBefore(panel, hd.nextSibling);
+  document.getElementById("print-any-btn").addEventListener("click", function () {
+    printSavedRoute(document.getElementById("history-date").value, document.getElementById("print-any-label").value);
+  });
+}
+document.addEventListener("DOMContentLoaded", addPrintAnyDatePanel);
+window.addEventListener("load", addPrintAnyDatePanel);
