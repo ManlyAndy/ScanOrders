@@ -7,6 +7,9 @@ const BITRIX_DIALOG_ID = `chat${BITRIX_CHAT_ID}`;
 const ALLOWED_ORIGIN = "https://manlyandy.github.io";
 const SESSION_TTL = 28800;
 const ROUTE_TTL = 15552000;
+// Название печатной формы отгрузки в МойСклад, которую печатаем как накладную.
+// Список доступных названий: GET /demand/templates
+const DELIVERY_NOTE_TEMPLATE = "Расходная без цен (без доставки) code128";
 
 const ALLOWED_MS_LOGINS = new Set([
   "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
@@ -312,6 +315,60 @@ async function handleRouteDetails(request, auth) {
     details.push.apply(details, batchResults);
   }
   return json({ ok: true, details: details });
+}
+
+// ---------- Печатные формы отгрузки (накладные) ----------
+async function loadDemandTemplates(auth) {
+  const out = [];
+  const kinds = ["embeddedtemplate", "customtemplate"];
+  for (let i = 0; i < kinds.length; i++) {
+    const res = await msFetchRetry(API_BASE + "/entity/demand/metadata/" + kinds[i], { "Authorization": auth }, 3);
+    if (!res || !res.ok) continue;
+    const data = await res.json();
+    (data.rows || []).forEach(function(r) { if (r && r.name && r.meta) out.push({ name: r.name, meta: r.meta, kind: kinds[i] }); });
+  }
+  return out;
+}
+
+async function handleDemandTemplates(auth) {
+  const list = await loadDemandTemplates(auth);
+  return json({ ok: true, current: DELIVERY_NOTE_TEMPLATE, templates: list.map(function(t) { return t.name + " (" + t.kind + ")"; }) });
+}
+
+async function handleDemandPrint(url, auth) {
+  const number = String(url.searchParams.get("number") || "").trim();
+  const tplName = String(url.searchParams.get("template") || DELIVERY_NOTE_TEMPLATE).trim().toLowerCase();
+  if (!number) return json({ ok: false, error: "Не передан номер" }, 400);
+
+  const findRes = await msFetchRetry(API_BASE + "/entity/demand?filter=" + encodeURIComponent("name=" + number), { "Authorization": auth }, 4);
+  if (!findRes || !findRes.ok) return json({ ok: false, error: "МойСклад не ответил (поиск отгрузки)", retry: true }, 502);
+  const found = await findRes.json();
+  const row = found.rows && found.rows[0];
+  if (!row) return json({ ok: false, error: "Отгрузка " + number + " не найдена" }, 404);
+
+  const templates = await loadDemandTemplates(auth);
+  if (!templates.length) return json({ ok: false, error: "Не удалось получить список печатных форм", retry: true }, 502);
+  const tpl = templates.find(function(t) { return t.name.trim().toLowerCase() === tplName; }) ||
+              templates.find(function(t) { return t.name.trim().toLowerCase().indexOf(tplName) >= 0; });
+  if (!tpl) return json({ ok: false, error: "Печатная форма «" + DELIVERY_NOTE_TEMPLATE + "» не найдена", available: templates.map(function(t) { return t.name; }) }, 404);
+
+  const exp = await fetch(API_BASE + "/entity/demand/" + row.id + "/export/", {
+    method: "POST",
+    headers: { "Authorization": auth, "Content-Type": "application/json" },
+    body: JSON.stringify({ template: { meta: tpl.meta }, extension: "pdf" }),
+    redirect: "manual"
+  });
+  let fileRes = null;
+  const loc = exp.headers.get("Location");
+  if (exp.status >= 300 && exp.status < 400 && loc) {
+    fileRes = await fetch(loc, { redirect: "follow" });
+    if (fileRes.status === 401 || fileRes.status === 403) fileRes = await fetch(loc, { headers: { "Authorization": auth }, redirect: "follow" });
+  } else if (exp.ok) {
+    fileRes = exp;
+  }
+  if (!fileRes || !fileRes.ok) return json({ ok: false, error: "МойСклад не отдал PDF (код " + (exp.status) + ")", retry: true }, 502);
+  const buf = await fileRes.arrayBuffer();
+  return new Response(buf, { status: 200, headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", ...corsHeaders() } });
 }
 
 async function handleShip(request, auth) {
@@ -958,6 +1015,8 @@ export default {
       if (url.pathname === "/find" && request.method === "GET") return await handleFind(url, auth);
       if (url.pathname === "/ship" && request.method === "POST") return await handleShip(request, auth);
       if (url.pathname === "/finish" && request.method === "POST") return await handleFinish(request, auth);
+      if (url.pathname === "/demand/templates" && request.method === "GET") return await handleDemandTemplates(auth);
+      if (url.pathname === "/demand/print" && request.method === "GET") return await handleDemandPrint(url, auth);
       if (url.pathname === "/route/details" && request.method === "POST") return await handleRouteDetails(request, auth);
       if (url.pathname === "/route" && request.method === "POST") {
         if (!isAllowedRouteLogin(username)) return json({ error: "Нет прав" }, 403);
