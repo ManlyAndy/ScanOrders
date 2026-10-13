@@ -5,7 +5,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-const APP_BUILD = "print-retry-3";
+const APP_BUILD = "notes-4";
 let parsedNumbers = [];
 let routeTasks = [];
 let lastSentRoute = null;
@@ -591,3 +591,108 @@ function addPrintAnyDatePanel() {
 }
 document.addEventListener("DOMContentLoaded", addPrintAnyDatePanel);
 window.addEventListener("load", addPrintAnyDatePanel);
+
+// ---------- Накладные на все отгрузки маршрута (одним PDF) ----------
+function loadPdfLib() {
+  if (window.PDFLib) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+    sc.onload = resolve;
+    sc.onerror = () => reject(new Error("Не удалось загрузить библиотеку PDF"));
+    document.head.appendChild(sc);
+  });
+}
+
+async function fetchNotePdf(number) {
+  let lastErr = "";
+  for (let a = 0; a < 4; a++) {
+    try {
+      const res = await fetch(`${CONFIG.PROXY_URL}/demand/print?number=${encodeURIComponent(number)}`, {
+        headers: { Authorization: getSavedAuth() },
+      });
+      if (res.status === 401) { logout(); throw new Error("сессия"); }
+      if (res.ok) return await res.arrayBuffer();
+      const j = await res.json().catch(() => ({}));
+      lastErr = j.error || ("код " + res.status);
+      if (j.available) lastErr += ". Доступные формы: " + j.available.join(", ");
+      if (res.status === 404) break;
+    } catch (e) {
+      if (e && e.message === "сессия") throw e;
+      lastErr = "нет связи";
+    }
+    await new Promise((r) => setTimeout(r, 600 * (a + 1)));
+  }
+  throw new Error(lastErr || "ошибка");
+}
+
+async function printDeliveryNotes(date, label) {
+  const statusEl = document.getElementById("notes-status");
+  const say = (html) => { if (statusEl) statusEl.innerHTML = html; };
+  if (!date || !label) return;
+  // окно открываем сразу по клику — иначе браузер заблокирует всплывающее окно
+  const w = window.open("", "_blank");
+  if (!w) { alert("Разрешите всплывающие окна для печати накладных."); return; }
+  w.document.write("<!doctype html><meta charset='utf-8'><p style='font-family:Arial;padding:28px'>Готовлю накладные…</p>");
+
+  try {
+    say("Загружаю список отгрузок…");
+    const res = await fetch(`${CONFIG.PROXY_URL}/route?date=${encodeURIComponent(date)}`, { headers: { Authorization: getSavedAuth() } });
+    if (res.status === 401) { w.close(); logout(); return; }
+    const data = await res.json().catch(() => ({}));
+    const numbers = (data.items || []).filter((it) => it.label === label).map((it) => String(it.number));
+    if (!numbers.length) { w.close(); say(`<span class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Маршрута «${escHtml(label)}» на ${escHtml(date)} нет.</span>`); return; }
+
+    await loadPdfLib();
+    const merged = await PDFLib.PDFDocument.create();
+    const failed = [];
+    let done = 0;
+    for (const n of numbers) {
+      say(`Накладные: ${done} из ${numbers.length}…`);
+      try {
+        const buf = await fetchNotePdf(n);
+        const src = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
+        const pages = await merged.copyPages(src, src.getPageIndices());
+        pages.forEach((p) => merged.addPage(p));
+      } catch (e) {
+        failed.push(n + " (" + ((e && e.message) || "ошибка") + ")");
+      }
+      done++;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (!merged.getPageCount()) {
+      w.close();
+      say(`<span class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Не удалось получить ни одной накладной. ${escHtml(failed[0] || "")}</span>`);
+      return;
+    }
+    const bytes = await merged.save();
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    w.location.href = url;
+    say(`<span class="ok-msg">Готово: накладных ${numbers.length - failed.length} из ${numbers.length}. В открывшемся окне нажмите «Печать».</span>` +
+      (failed.length ? `<br><span class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Не получены: ${escHtml(failed.join("; "))}</span>` : ""));
+  } catch (e) {
+    try { w.close(); } catch (x) {}
+    say(`<span class="error" style="background:#fff;padding:6px 8px;border-radius:6px;display:inline-block">Ошибка: ${escHtml((e && e.message) || "не удалось подготовить накладные")}</span>`);
+  }
+}
+
+function addNotesButton() {
+  const panel = document.getElementById("print-any-panel");
+  if (!panel || document.getElementById("notes-btn")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "notes-btn";
+  btn.className = "btn-secondary";
+  btn.style.cssText = "width:auto;padding:10px 14px;margin:0;";
+  btn.textContent = "🧾 Накладные на все отгрузки";
+  btn.addEventListener("click", function () {
+    printDeliveryNotes(document.getElementById("history-date").value, document.getElementById("print-any-label").value);
+  });
+  panel.appendChild(btn);
+  const st = document.createElement("div");
+  st.id = "notes-status";
+  st.style.cssText = "width:100%;font-size:14px;";
+  panel.appendChild(st);
+}
+document.addEventListener("DOMContentLoaded", () => setTimeout(addNotesButton, 0));
+window.addEventListener("load", () => setTimeout(addNotesButton, 0));
