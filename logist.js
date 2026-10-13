@@ -328,21 +328,57 @@ async function sendRoute() {
 // Пачки по 20: на каждый номер воркер делает 2 запроса к МойСклад, а лимит подзапросов один запрос к воркеру ограничен.
 async function fetchRouteDetails(numbers, onChunk) {
   const map = {};
+  numbers.forEach((n) => {
+    map[String(n)] = {
+      number: String(n),
+      tc: "",
+      clientName: "",
+      agentName: "",
+      places: null,
+      description: "",
+      stateName: ""
+    };
+  });
+
   for (let i = 0; i < numbers.length; i += 20) {
     const chunk = numbers.slice(i, i + 20);
     try {
       const res = await fetch(`${CONFIG.PROXY_URL}/route/details`, {
         method: "POST",
-        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-        body: JSON.stringify({ numbers: chunk }),
+        headers: {
+          Authorization: getSavedAuth(),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ numbers: chunk })
       });
-      if (res.status === 401) { logout(); return map; }
+
+      if (res.status === 401) {
+        logout();
+        return map;
+      }
       if (!res.ok) continue;
+
       const data = await res.json();
-      (data.details || []).forEach((d) => { map[String(d.number)] = d; });
+      (data.details || []).forEach((d) => {
+        const key = String(d.number);
+        map[key] = {
+          ...(map[key] || {}),
+          ...d,
+          number: key,
+          tc: d.tc || "",
+          clientName: d.clientName || d.agentName || "",
+          agentName: d.agentName || d.clientName || "",
+          places: d.places == null ? null : d.places,
+          description: d.description || ""
+        };
+      });
+
       if (onChunk) onChunk(map);
-    } catch (e) { /* без этих данных */ }
+    } catch (e) {
+      // Сохраняем номера даже при временной ошибке получения данных.
+    }
   }
+
   return map;
 }
 
