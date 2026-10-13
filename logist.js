@@ -5,7 +5,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-const APP_BUILD = "print-any-date-2";
+const APP_BUILD = "print-retry-3";
 let parsedNumbers = [];
 let routeTasks = [];
 let lastSentRoute = null;
@@ -330,56 +330,50 @@ async function sendRoute() {
 async function fetchRouteDetails(numbers, onChunk) {
   const map = {};
   numbers.forEach((n) => {
-    map[String(n)] = {
-      number: String(n),
-      tc: "",
-      clientName: "",
-      agentName: "",
-      places: null,
-      description: "",
-      stateName: ""
-    };
+    map[String(n)] = { number: String(n), tc: "", clientName: "", agentName: "", places: null, description: "", stateName: "", failed: true };
   });
 
-  for (let i = 0; i < numbers.length; i += 20) {
-    const chunk = numbers.slice(i, i + 20);
-    try {
-      const res = await fetch(`${CONFIG.PROXY_URL}/route/details`, {
-        method: "POST",
-        headers: {
-          Authorization: getSavedAuth(),
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ numbers: chunk })
-      });
-
-      if (res.status === 401) {
-        logout();
-        return map;
-      }
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      (data.details || []).forEach((d) => {
-        const key = String(d.number);
-        map[key] = {
-          ...(map[key] || {}),
-          ...d,
-          number: key,
-          tc: d.tc || "",
-          clientName: d.clientName || d.agentName || "",
-          agentName: d.agentName || d.clientName || "",
-          places: d.places == null ? null : d.places,
-          description: d.description || ""
-        };
-      });
-
-      if (onChunk) onChunk(map);
-    } catch (e) {
-      // Сохраняем номера даже при временной ошибке получения данных.
+  // Один проход по номерам пачками; номера, которые не удалось получить, возвращаются в failed
+  async function pass(list) {
+    for (let i = 0; i < list.length; i += 10) {
+      const chunk = list.slice(i, i + 10);
+      try {
+        const res = await fetch(`${CONFIG.PROXY_URL}/route/details`, {
+          method: "POST",
+          headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+          body: JSON.stringify({ numbers: chunk })
+        });
+        if (res.status === 401) { logout(); return false; }
+        if (!res.ok) continue;
+        const data = await res.json();
+        (data.details || []).forEach((d) => {
+          const key = String(d.number);
+          if (d.failed) return; // оставляем failed, повторим позже
+          map[key] = {
+            ...d,
+            number: key,
+            tc: d.tc || "",
+            clientName: d.clientName || d.agentName || "",
+            agentName: d.agentName || d.clientName || "",
+            places: d.places == null ? null : d.places,
+            description: d.description || "",
+            failed: false
+          };
+        });
+        if (onChunk) onChunk(map);
+      } catch (e) { /* повторим ниже */ }
     }
+    return true;
   }
 
+  // До 4 проходов: после каждого повторяем только то, что не получилось (МойСклад иногда отвечает отказом при нагрузке)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const todo = numbers.map(String).filter((n) => map[n].failed);
+    if (!todo.length) break;
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 700 * attempt));
+    const ok = await pass(todo);
+    if (ok === false) break;
+  }
   return map;
 }
 
@@ -453,10 +447,12 @@ async function renderPrint(w, r) {
   const items = rows.map((x, i) =>
     `<tr><td>${i + 1}</td><td>№ ${esc(x.n)}</td><td>${esc(x.tc)}</td><td>${esc(x.client)}</td><td>${esc(x.places)}</td><td>${esc(x.description)}</td></tr>`
   ).join("");
+  const missing = rows.filter((x) => details[x.n] && details[x.n].failed).length;
+  const warn = missing ? `<p style="color:#c0392b;font-weight:700">⚠ Не удалось получить данные из МойСклад по ${missing} отгрузкам. Нажмите «Печать» ещё раз.</p>` : "";
   const tasks = r.tasks.length ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
 
   w.document.open();
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}ol,ul{line-height:1.6}@media print{body{padding:0}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div><h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th><th>ТК</th><th>Контрагент</th><th>Места</th><th>Описание</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\/script></body></html>`);
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}ol,ul{line-height:1.6}@media print{body{padding:0}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div>${warn}<h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th><th>ТК</th><th>Контрагент</th><th>Места</th><th>Описание</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
 
