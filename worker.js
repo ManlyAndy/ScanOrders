@@ -259,30 +259,43 @@ async function handleFind(url, auth) {
   });
 }
 
+// Запрос к МойСклад с повтором при лимитах (429) и временных ошибках (5xx)
+async function msFetchRetry(url, headers, tries) {
+  let last = null;
+  for (let a = 0; a < (tries || 4); a++) {
+    try {
+      const res = await fetch(url, { headers: headers, cf: { cacheTtl: 0 } });
+      if (res.status !== 429 && res.status < 500) return res;
+      last = res;
+    } catch (e) { last = null; }
+    await new Promise(function(r) { setTimeout(r, 400 * (a + 1)); });
+  }
+  return last;
+}
+
 async function handleRouteDetails(request, auth) {
   const body = await request.json();
   const numbers = Array.isArray(body.numbers) ? body.numbers.map(String).filter(Boolean).slice(0, 100) : [];
   if (!numbers.length) return json({ ok: true, details: [] });
 
+  const headers = { "Authorization": auth };
+  const failedRow = function(num) { return { number: num, places: null, description: "", tc: "", agentName: "", clientName: "", stateName: "", failed: true }; };
   const details = [];
-  for (let i = 0; i < numbers.length; i += 10) {
-    const batch = numbers.slice(i, i + 10);
+  // МойСклад ограничивает число параллельных запросов — идём по 3 номера за раз
+  const PAR = 3;
+  for (let i = 0; i < numbers.length; i += PAR) {
+    const batch = numbers.slice(i, i + PAR);
     const batchResults = await Promise.all(batch.map(async function(num) {
       try {
         const filter = encodeURIComponent("name=" + num);
-        const res = await fetch(API_BASE + "/entity/demand?filter=" + filter + "&expand=agent,state", {
-          headers: { "Authorization": auth },
-          cf: { cacheTtl: 0 }
-        });
-        if (!res.ok) return { number: num, places: null, description: "", tc: "", agentName: "" };
+        const res = await msFetchRetry(API_BASE + "/entity/demand?filter=" + filter + "&expand=agent,state", headers);
+        if (!res || !res.ok) return failedRow(num);
         const data = await res.json();
         const row = data.rows && data.rows[0];
-        if (!row) return { number: num, places: null, description: "", tc: "", agentName: "" };
+        if (!row) return { number: num, places: null, description: "", tc: "", agentName: "", clientName: "", stateName: "", notFound: true };
 
-        const detailRes = await fetch(API_BASE + "/entity/demand/" + row.id + "?expand=agent,state", {
-          headers: { "Authorization": auth }
-        });
-        if (!detailRes.ok) return { number: num, places: null, description: "", tc: "", agentName: "" };
+        const detailRes = await msFetchRetry(API_BASE + "/entity/demand/" + row.id + "?expand=agent,state", headers);
+        if (!detailRes || !detailRes.ok) return failedRow(num);
         const detail = await detailRes.json();
 
         return {
@@ -294,10 +307,9 @@ async function handleRouteDetails(request, auth) {
           agentName: detail.agent && detail.agent.name ? detail.agent.name : "",
           stateName: detail.state && detail.state.name ? detail.state.name : ""
         };
-      } catch (e) { return { number: num, places: null, description: "", tc: "" }; }
+      } catch (e) { return failedRow(num); }
     }));
     details.push.apply(details, batchResults);
-    if (i + 10 < numbers.length) await new Promise(function(r) { setTimeout(r, 200); });
   }
   return json({ ok: true, details: details });
 }
