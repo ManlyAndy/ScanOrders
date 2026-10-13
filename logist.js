@@ -541,4 +541,4 @@ async function showHistoryForDate() {
     if (reqId === historyReqId) render(partial, true);
   });
   if (reqId === historyReqId) render(details, false);
-}
+} 
