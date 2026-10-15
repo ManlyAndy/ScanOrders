@@ -12,11 +12,11 @@ const ROUTE_TTL = 15552000;
 const DELIVERY_NOTE_TEMPLATE = "Расходная без цен (без доставки) code128";
 
 const ALLOWED_MS_LOGINS = new Set([
-  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
+  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191", "kondachkov_m@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 const ALLOWED_ROUTE_LOGINS = new Set([
-  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191"
+  "kovalkov@boss191", "harunin@boss191", "grishaev@boss191", "absaluttinova@boss191", "kondachkov_m@boss191"
 ].map(v => v.trim().toLowerCase()).filter(Boolean));
 
 function corsHeaders() {
