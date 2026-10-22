@@ -449,7 +449,8 @@ async function renderPrint(w, r) {
   ).join("");
   const missing = rows.filter((x) => details[x.n] && details[x.n].failed).length;
   const warn = missing ? `<p style="color:#c0392b;font-weight:700">⚠ Не удалось получить данные из МойСклад по ${missing} отгрузкам. Нажмите «Печать» ещё раз.</p>` : "";
-  const tasks = r.tasks.length ? r.tasks.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
+  const routeTasksToPrint = Array.isArray(r.tasks) ? r.tasks : [];
+  const tasks = routeTasksToPrint.length ? routeTasksToPrint.map(t => `<li>${esc(t)}</li>`).join("") : '<li>Дополнительных заданий нет</li>';
 
   w.document.open();
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Маршрут ${esc(r.label)} ${esc(r.date)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:22px}h2{font-size:17px;margin-top:28px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}ol,ul{line-height:1.6}@media print{body{padding:0}}</style></head><body><h1>Маршрут: ${esc(r.label)}</h1><div>Дата: ${esc(r.date)}</div>${warn}<h2>Отгрузки (${r.numbers.length})</h2><table><thead><tr><th>№</th><th>Отгрузка</th><th>ТК</th><th>Контрагент</th><th>Места</th><th>Описание</th></tr></thead><tbody>${items}</tbody></table><h2>Дополнительные задания</h2><ul>${tasks}</ul><script>window.onload=()=>window.print();<\/script></body></html>`);
@@ -559,6 +560,7 @@ async function showHistoryForDate() {
 
       html += `<div class="history-item">` +
         `<div class="history-date">${escHtml(label)} — отгрузок: ${nums.length} ${doneBadge} ` +
+        `<button class="btn-secondary" style="width:auto;display:inline-block;padding:4px 10px;margin:0 0 0 6px;font-size:13px;" data-date="${escHtml(date)}" data-label="${escHtml(label)}" onclick="editSavedRouteTasks(this.dataset.date,this.dataset.label)">✏️ Задания</button> ` +
         `<button class="btn-secondary" style="width:auto;display:inline-block;padding:4px 10px;margin:0 0 0 6px;font-size:13px;" data-date="${escHtml(date)}" data-label="${escHtml(label)}" onclick="printSavedRoute(this.dataset.date,this.dataset.label)">🖨 Печать</button></div>` +
         (summary ? `<div class="history-labels">${summary}</div>` : "") +
         `<div style="margin-top:6px;">${body}</div></div>`;
@@ -571,6 +573,41 @@ async function showHistoryForDate() {
     if (reqId === historyReqId) render(partial, true);
   });
   if (reqId === historyReqId) render(details, false);
+}
+
+// Edit and persist tasks for an already-saved route. Tasks are stored server-side,
+// so they remain available after refresh and when another logistics user prints.
+async function editSavedRouteTasks(date, label) {
+  if (!date || !label) return;
+  try {
+    const getRes = await fetch(`${CONFIG.PROXY_URL}/route?date=${encodeURIComponent(date)}`, {
+      headers: { Authorization: getSavedAuth() },
+    });
+    if (getRes.status === 401) { logout(); return; }
+    const data = await getRes.json().catch(() => ({}));
+    if (!getRes.ok) throw new Error(data.error || "Не удалось загрузить маршрут");
+    const numbers = (data.items || []).filter((it) => it.label === label).map((it) => String(it.number));
+    if (!numbers.length) { alert(`Маршрут «${label}» на ${date} не найден.`); return; }
+    const currentTasks = data.tasksByLabel && Array.isArray(data.tasksByLabel[label]) ? data.tasksByLabel[label] : [];
+    const entered = prompt(
+      `Дополнительные задания для маршрута «${label}» на ${date}. Введите по одному заданию на строку. Чтобы удалить все задания, оставьте поле пустым.`,
+      currentTasks.join("\n")
+    );
+    if (entered === null) return;
+    const tasks = entered.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const saveRes = await fetch(`${CONFIG.PROXY_URL}/route`, {
+      method: "POST",
+      headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+      body: JSON.stringify({ date, label, numbers, tasks }),
+    });
+    if (saveRes.status === 401) { logout(); return; }
+    const saved = await saveRes.json().catch(() => ({}));
+    if (!saveRes.ok || !saved.ok) throw new Error(saved.error || "Не удалось сохранить задания");
+    alert("Дополнительные задания сохранены.");
+    await showHistoryForDate();
+  } catch (e) {
+    alert(e.message || "Не удалось изменить задания. Проверьте соединение.");
+  }
 }
 
 // Отдельная панель печати рядом с выбором даты истории: не зависит от списка ниже
