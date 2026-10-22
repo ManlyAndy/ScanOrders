@@ -456,6 +456,12 @@ async function handleRouteUpload(request, auth, env) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Неверная дата" }, 400);
   if (!numbers.length) return json({ error: "Список пуст" }, 400);
   if (!label || label.length > 100) return json({ error: "Неверное название" }, 400);
+  // If tasks is supplied, save it for this route label. If an older client omits
+  // tasks entirely, preserve the tasks already stored for that route.
+  const hasTasks = Array.isArray(body.tasks);
+  const tasks = hasTasks
+    ? [...new Set(body.tasks.map(function(x) { return String(x).trim(); }).filter(Boolean))].slice(0, 200)
+    : null;
   const key = routeKey(date);
   const existing = await env.ROUTES.get(key, { type: "json" });
   const items = Array.isArray(existing && existing.items) ? existing.items : [];
@@ -463,10 +469,12 @@ async function handleRouteUpload(request, auth, env) {
   for (let i = 0; i < numbers.length; i++) {
     filtered.push({ number: numbers[i], label: label });
   }
+  const tasksByLabel = Object.assign({}, (existing && existing.tasksByLabel) || {});
+  if (hasTasks) tasksByLabel[label] = tasks;
   await env.ROUTES.put(key, JSON.stringify({
     date: date,
     items: filtered,
-    tasksByLabel: (existing && existing.tasksByLabel) || {},
+    tasksByLabel: tasksByLabel,
     completedRoutes: (existing && existing.completedRoutes) || {}
   }), { expirationTtl: ROUTE_TTL });
   return json({ ok: true, count: filtered.length });
