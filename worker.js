@@ -150,9 +150,17 @@ function extractPlaces(row) {
 
 const KNOWN_TC_NAMES = [
   "Деловые Линии", "Байкал", "ПЭК", "Новая Линия", "Мэджик Транс",
-  "Главтрасса", "НТК", "РТС", "Рейл континент", "Авангард",
-  "Витэка", "Транзит", "Сдэк"
+  "ТК Мэйджик Транс", "Главтрасса", "НТК", "РТС", "Рейл континент", "Авангард",
+  "Витэка", "Транзит", "Сдэк", "СДЭК"
 ];
+const TC_NAME_CANONICAL = new Map([
+  ["тк мэйджик транс", "Мэджик Транс"],
+  ["сдэк", "Сдэк"]
+]);
+function canonicalTCName(name) {
+  const normalized = normalizeText(name).toLocaleLowerCase("ru").replace(/ё/g, "е");
+  return TC_NAME_CANONICAL.get(normalized) || name;
+}
 const TC_ORDER = new Map(KNOWN_TC_NAMES.map(function(name, i) { return [name.toLowerCase(), i]; }));
 
 function normalizeText(s) {
@@ -169,7 +177,7 @@ function extractTCFromDescription(desc) {
   for (let i = 0; i < KNOWN_TC_NAMES.length; i++) {
     const name = KNOWN_TC_NAMES[i];
     const re = new RegExp("(?:^|[^А-Яа-яЁёA-Za-z])" + escapeRegExp(name) + "(?:$|[^А-Яа-яЁёA-Za-z])", "i");
-    if (re.test(text)) return name;
+    if (re.test(text)) return canonicalTCName(name);
   }
   // Разрешаем короткую запись первого слова, если она однозначно указывает на ТК:
   // например, «Мэджик» -> «Мэджик Транс».
@@ -180,7 +188,7 @@ function extractTCFromDescription(desc) {
       return word.toLocaleLowerCase("ru") === firstWord.toLocaleLowerCase("ru") && firstWord.length >= 4;
     });
   });
-  return matches.length === 1 ? matches[0] : "";
+  return matches.length === 1 ? canonicalTCName(matches[0]) : "";
 }
 
 function cleanClientCandidate(value) {
