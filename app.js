@@ -6,6 +6,7 @@ let currentResult = null;
 let currentRoute = null;
 let selectedRouteType = "МСК";
 let isScannerActive = false;
+let scanLookupInProgress = false;
 let openedFromList = false;
 let routeSearch = "";
 let tcLoading = false;
@@ -150,7 +151,19 @@ function ensureSearchBox() {
 }
 function TC_ORDER_RANK(tc) {
   const order = ["Деловые Линии", "Байкал", "ПЭК", "Новая Линия", "Мэджик Транс", "Главтрасса", "НТК", "РТС", "Рейл континент", "Авангард", "Витэка", "Транзит", "Сдэк", "Без ТК"];
-  const i = order.findIndex((x) => x.toLowerCase() === String(tc || "").toLowerCase());
+  const normalize = (value) => String(value || "").trim().toLocaleLowerCase("ru")
+    .replace(/ё/g, "е").replace(/^т\s*к\s+/i, "").replace(/\s+/g, " ");
+  const aliases = new Map([
+    ["мэйджик транс", "мэджик транс"],
+    ["тк мэйджик транс", "мэджик транс"],
+    ["magic trans", "мэджик транс"],
+    ["tk magic trans", "мэджик транс"],
+    ["сдэк", "сдэк"],
+    ["cdek", "сдэк"]
+  ]);
+  let key = normalize(tc);
+  key = aliases.get(key) || key;
+  const i = order.findIndex((x) => normalize(x) === key);
   return i < 0 ? order.length + 1 : i;
 }
 function renderModalList() {
@@ -435,23 +448,27 @@ function retryCamera() {
   setTimeout(startScanner, 300);
 }
 function stopScanner() {
-  if (html5QrCode && isScannerActive) {
+  const scanner = html5QrCode;
+  html5QrCode = null;
+  const wasActive = isScannerActive;
+  isScannerActive = false;
+  if (scanner && wasActive) {
     try {
-      const result = html5QrCode.stop();
-      if (result && typeof result.catch === "function") {
-        result.catch(() => {});
-      }
+      const result = scanner.stop();
+      if (result && typeof result.catch === "function") result.catch(() => {});
     } catch (e) {}
-    html5QrCode = null;
-    isScannerActive = false;
   }
 }
 function onScanSuccess(decodedText) {
-  // Игнорируем сканирования, если показан экран результата
+  // Один QR-код должен запускать только один поиск. Останавливаем камеру,
+  // чтобы тот же код не считался повторно сразу после нажатия «Сканировать следующий».
   const resultScreen = document.getElementById("screen-result");
-  if (resultScreen.classList.contains("active")) return;
-  
-  lookupCode(decodedText.trim());
+  if (resultScreen.classList.contains("active") || scanLookupInProgress) return;
+  const code = String(decodedText || "").trim();
+  if (!code) return;
+  scanLookupInProgress = true;
+  stopScanner();
+  lookupCode(code).finally(() => { scanLookupInProgress = false; });
 }
 function showManualInput() {
   document.getElementById("manual-input-wrap").style.display = "block";
@@ -469,6 +486,9 @@ function backToScan() {
   if (openedFromList) {
     openedFromList = false;
     openRouteModal();
+  } else {
+    // Камера была остановлена после распознавания предыдущего QR-кода.
+    setTimeout(startScanner, 300);
   }
 }
 // ---------- ПОИСК И ОТОБРАЖЕНИЕ ----------
@@ -705,22 +725,33 @@ async function startPrewarm() {
 async function fetchPhotoBlob(photo, headers, number) {
   const id = photo && photo.id;
   let lastErr = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const r = await fetch(`${CONFIG.PROXY_URL}/photo/file?id=${encodeURIComponent(id)}&number=${encodeURIComponent(number || "")}`, { headers });
-      if (r.ok) return await r.blob();
-      if (r.status === 401) { logout(); throw new Error("сессия"); }
-      lastErr = "код " + r.status;
-      try { const j = await r.json(); if (j && j.error) lastErr = j.error; } catch (e) {}
-      if (r.status === 404) break;
+      if (r.ok) {
+        const blob = await r.blob();
+        const type = String(blob.type || "").toLowerCase();
+        // Proxy/API error pages can occasionally arrive with HTTP 200; don't show them as photos.
+        if (type.includes("text/html") || type.includes("application/json") || blob.size < 32) {
+          lastErr = "сервер вернул не изображение";
+        } else {
+          return blob;
+        }
+      } else {
+        if (r.status === 401) { logout(); throw new Error("сессия"); }
+        lastErr = "код " + r.status;
+        try { const j = await r.json(); if (j && j.error) lastErr = j.error; } catch (e) {}
+        if (r.status === 404) break;
+      }
     } catch (e) {
       if (e && e.message === "сессия") throw e;
-      lastErr = "нет сети";
+      lastErr = (e && e.message) || "нет сети";
     }
-    await new Promise((res) => setTimeout(res, 300 * (attempt + 1)));
+    if (attempt < 2) await new Promise((res) => setTimeout(res, 350 * (attempt + 1)));
   }
   throw new Error(lastErr || "ошибка");
 }
+
 async function loadPhotos(number) {
   const reqId = ++photoReqId;
   photoUrls.forEach((u) => URL.revokeObjectURL(u));
@@ -770,6 +801,12 @@ async function loadPhotos(number) {
           if (reqId !== photoReqId) return;
           const src = URL.createObjectURL(blob);
           photoUrls.push(src);
+          img.onload = () => { cells[idx].style.background = "#fff"; };
+          img.onerror = () => {
+            img.remove();
+            cells[idx].style.padding = "8px";
+            cells[idx].textContent = "Фото повреждено или недоступно";
+          };
           img.src = src;
           img.onclick = () => openPhotoViewer(src);
         } catch (e) {
@@ -784,98 +821,182 @@ async function loadPhotos(number) {
     list.innerHTML = '<div class="hint" style="grid-column:1/-1">Не удалось загрузить фото — проверьте интернет</div>';
   }
 }
+function closePhotoViewer() {
+  const v = document.getElementById("photo-viewer");
+  const img = document.getElementById("photo-viewer-img");
+  if (v) {
+    v.style.display = "none";
+    v.setAttribute("aria-hidden", "true");
+  }
+  if (img) img.src = "";
+}
+
 function openPhotoViewer(src) {
   let v = document.getElementById("photo-viewer");
   if (!v) {
     v = document.createElement("div");
     v.id = "photo-viewer";
-    v.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:300;display:none;align-items:center;justify-content:center;";
-    v.innerHTML = '<img id="photo-viewer-img" alt="" style="max-width:100%;max-height:100%;object-fit:contain;" />';
-    v.onclick = () => { v.style.display = "none"; document.getElementById("photo-viewer-img").src = ""; };
+    v.setAttribute("role", "dialog");
+    v.setAttribute("aria-label", "Просмотр фотографии");
+    v.setAttribute("aria-modal", "true");
+    v.setAttribute("aria-hidden", "false");
+    // Use fixed edges and a very high z-index so the viewer and close control
+    // remain above app screens and mobile browser safe-area overlays.
+    v.style.cssText = [
+      "position:fixed", "top:0", "right:0", "bottom:0", "left:0",
+      "width:100vw", "height:100dvh", "height:100vh",
+      "background:rgba(0,0,0,0.96)", "z-index:2147483647",
+      "display:flex", "align-items:center", "justify-content:center",
+      "padding:70px 8px 12px", "touch-action:manipulation",
+      "cursor:pointer"
+    ].join(";");
+
+    v.innerHTML =
+      '<button type="button" id="photo-viewer-close" aria-label="Закрыть фото" ' +
+      'style="position:fixed;top:calc(env(safe-area-inset-top, 0px) + 12px);right:calc(env(safe-area-inset-right, 0px) + 12px);' +
+      'width:52px;height:52px;min-width:52px;max-width:52px;min-height:52px;max-height:52px;' +
+      'display:flex;align-items:center;justify-content:center;margin:0;padding:0;' +
+      'border:2px solid #111;border-radius:50%;background:#fff;color:#111;' +
+      'font-family:Arial,sans-serif;font-size:38px;font-weight:700;line-height:1;' +
+      'z-index:2147483647;cursor:pointer;box-shadow:0 2px 12px #000;' +
+      'pointer-events:auto;touch-action:manipulation;">×</button>' +
+      '<img id="photo-viewer-img" alt="Фотография" ' +
+      'style="display:block;max-width:100%;max-height:100%;object-fit:contain;cursor:pointer;pointer-events:auto;" />';
+
+    // Any tap on the fullscreen photo or its dark background closes the viewer.
+    v.addEventListener("click", closePhotoViewer);
+    v.addEventListener("pointerup", function (event) {
+      if (event.target === v || event.target.id === "photo-viewer-img") {
+        closePhotoViewer();
+      }
+    });
+    const closeBtn = v.querySelector("#photo-viewer-close");
+    closeBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      closePhotoViewer();
+    });
+    closeBtn.addEventListener("pointerup", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      closePhotoViewer();
+    });
     document.body.appendChild(v);
   }
-  document.getElementById("photo-viewer-img").src = src;
+
+  const image = document.getElementById("photo-viewer-img");
+  image.src = src;
+  v.setAttribute("aria-hidden", "false");
   v.style.display = "flex";
+}
+
+if (!window.__photoViewerEscapeBound) {
+  window.__photoViewerEscapeBound = true;
+  document.addEventListener("keydown", function(event) {
+    if (event.key === "Escape" || event.key === "Backspace") closePhotoViewer();
+  });
 }
 
 // ---------- ЗАКРЫТИЕ МАРШРУТА ----------
 async function finishRoute() {
   if (!currentRoute) return;
-  
-  const total = currentRoute.numbers.length;
-  const scanned = currentRoute.scanned.size;
+
+  const route = currentRoute;
+  const total = route.numbers.length;
+  const scannedNumbers = Array.from(route.scanned);
+  const scanned = scannedNumbers.length;
   const notScanned = total - scanned;
-  
-  let message = `Закрыть маршрут "${currentRoute.type}" на ${currentRoute.date}?\n\n`;
+
+  let message = `Закрыть маршрут "${route.type}" на ${route.date}?\n\n`;
   message += `Отсканировано: ${scanned} из ${total}\n`;
-  
   if (notScanned > 0) {
     message += `Не отсканировано: ${notScanned}\n\n`;
-    message += `Все отсканированные будут переведены в статус "Отгружено".\n`;
+    message += `Отсканированные отгрузки будут переведены в статус "Отгружено".\n`;
     message += `Неотсканированные останутся в статусе "Собрано".`;
   } else {
     message += `Все отгрузки будут переведены в статус "Отгружено".`;
   }
-  
   if (!confirm(message)) return;
-  
+
   const btn = document.getElementById("finish-route-btn");
-  const originalText = btn.textContent;
-  btn.textContent = "Закрываю…";
-  btn.disabled = true;
-  
+  const originalText = btn ? btn.textContent : "Закрыть маршрут";
+  if (btn) { btn.textContent = "Проверяю статусы…"; btn.disabled = true; }
+
   try {
-    const idsToShip = [];
-    for (const num of currentRoute.scanned) {
+    const failures = [];
+    const idsToNumber = new Map();
+    // Получаем актуальные ID и не теряем номера при временной ошибке API.
+    for (const num of scannedNumbers) {
       try {
         const res = await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}`, {
-          headers: { Authorization: getSavedAuth() }
+          headers: { Authorization: getSavedAuth() },
+          cache: "no-store"
         });
         if (res.status === 401) { logout(); return; }
-        if (res.ok) {
-          const data = await res.json();
-          if (data.found && data.ready) {
-            idsToShip.push(data.id);
-          }
+        if (!res.ok) { failures.push(`${num}: ошибка поиска (HTTP ${res.status})`); continue; }
+        const data = await res.json();
+        if (!data.found || !data.id) { failures.push(`${num}: отгрузка не найдена`); continue; }
+        idsToNumber.set(String(data.id), String(num));
+      } catch (e) {
+        failures.push(`${num}: не удалось проверить статус`);
+      }
+    }
+
+    const ids = Array.from(idsToNumber.keys());
+    for (let i = 0; i < ids.length; i += 50) {
+      const batch = ids.slice(i, i + 50);
+      if (btn) btn.textContent = `Меняю статусы… ${Math.min(i + batch.length, ids.length)} из ${ids.length}`;
+      try {
+        const finishRes = await fetch(`${CONFIG.PROXY_URL}/finish`, {
+          method: "POST",
+          headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: batch })
+        });
+        if (finishRes.status === 401) { logout(); return; }
+        const resultData = await finishRes.json().catch(() => ({}));
+        if (!finishRes.ok || !Array.isArray(resultData.results)) {
+          batch.forEach(id => failures.push(`${idsToNumber.get(id)}: сервер не подтвердил смену статуса`));
+          continue;
         }
-      } catch {}
+        const resultById = new Map(resultData.results.map(r => [String(r.id), r]));
+        batch.forEach(id => {
+          const result = resultById.get(String(id));
+          if (!result || !result.ok) {
+            failures.push(`${idsToNumber.get(id)}: ${result && result.error ? result.error : "статус не изменён"}`);
+          }
+        });
+      } catch (e) {
+        batch.forEach(id => failures.push(`${idsToNumber.get(id)}: ошибка соединения при смене статуса`));
+      }
     }
-    
-    if (idsToShip.length) {
-      const finishRes = await fetch(`${CONFIG.PROXY_URL}/finish`, {
-        method: "POST",
-        headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: idsToShip })
-      });
-      if (finishRes.status === 401) { logout(); return; }
+
+    if (failures.length) {
+      const shown = failures.slice(0, 12).join("\n");
+      const more = failures.length > 12 ? `\n…и ещё ${failures.length - 12}` : "";
+      alert(`Маршрут НЕ закрыт: не все отгрузки удалось подтвердить как отгруженные.\n\n${shown}${more}\n\nУже успешно отгруженные повторно не изменятся. Проверьте связь и нажмите «Закрыть маршрут» ещё раз.`);
+      return;
     }
-    
+
     const completeRes = await fetch(`${CONFIG.PROXY_URL}/route/complete`, {
       method: "POST",
       headers: { Authorization: getSavedAuth(), "Content-Type": "application/json" },
-      body: JSON.stringify({
-        date: currentRoute.date,
-        label: currentRoute.type,
-        scanned: Array.from(currentRoute.scanned)
-      })
+      body: JSON.stringify({ date: route.date, label: route.type, scanned: scannedNumbers })
     });
-    
     if (completeRes.status === 401) { logout(); return; }
-    const completeData = await completeRes.json();
-    
-    if (completeData.ok) {
-      alert(`Маршрут "${currentRoute.type}" закрыт.\n\nОтсканировано: ${scanned} из ${total}`);
-      localStorage.removeItem(routeStorageKey(currentRoute.type));
-      currentRoute = null;
-      renderRouteStatus();
-       } else {
-      alert("Не удалось сохранить информацию о закрытии маршрута");
+    const completeData = await completeRes.json().catch(() => ({}));
+    if (!completeRes.ok || !completeData.ok) {
+      alert("Все отсканированные отгрузки обработаны, но не удалось сохранить закрытие маршрута. Маршрут останется на телефоне; повторите закрытие позже.");
+      return;
     }
+
+    alert(`Маршрут "${route.type}" закрыт.\n\nОтгружено: ${scanned} из ${total}.`);
+    localStorage.removeItem(routeStorageKey(route.type));
+    currentRoute = null;
+    renderRouteStatus();
   } catch (e) {
-    alert("Ошибка при закрытии маршрута");
+    alert("Ошибка при закрытии маршрута. Маршрут сохранён на телефоне — можно повторить попытку.");
   } finally {
-    btn.textContent = originalText;
-    btn.disabled = false;
+    if (btn) { btn.textContent = originalText; btn.disabled = false; }
   }
 }
 
