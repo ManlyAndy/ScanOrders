@@ -983,7 +983,7 @@ async function handlePhotoFile(url, env) {
     }
   }
 
-  if (!isFile(fileRes)) return json({ error: "Не удалось получить файл" + (reason ? " (" + reason + ")" : "") }, 502);
+  if (!(await isFile(fileRes))) return json({ error: "Не удалось получить файл" + (reason ? " (" + reason + ")" : "") }, 502);
   return new Response(fileRes.body, {
     status: 200,
     headers: Object.assign({
