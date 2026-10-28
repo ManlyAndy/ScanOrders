@@ -379,75 +379,149 @@ async function handleDemandPrint(url, auth) {
   return new Response(buf, { status: 200, headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", ...corsHeaders() } });
 }
 
+// Retry temporary МойСклад API failures (rate limits, 5xx, and network errors).
+// The request body used here is a string, so it can safely be sent again.
+async function fetchMsRetry(url, init, attempts) {
+  const maxAttempts = attempts || 4;
+  let lastResponse = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, init || {});
+      lastResponse = res;
+      lastError = null;
+      if (res.status !== 429 && res.status < 500) return res;
+      if (attempt === maxAttempts - 1) return res;
+      const retryAfter = Number(res.headers && res.headers.get ? res.headers.get("Retry-After") : 0);
+      const delay = retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : 350 * (attempt + 1) * (attempt + 1);
+      await new Promise(function(resolve) { setTimeout(resolve, delay); });
+    } catch (e) {
+      lastError = e;
+      if (attempt === maxAttempts - 1) break;
+      await new Promise(function(resolve) { setTimeout(resolve, 350 * (attempt + 1) * (attempt + 1)); });
+    }
+  }
+  if (lastResponse) return lastResponse;
+  throw lastError || new Error("Не удалось связаться с МойСклад");
+}
+
+async function readShippedStateMeta(auth) {
+  const metaRes = await fetchMsRetry(API_BASE + "/entity/demand/metadata", {
+    headers: { "Authorization": auth },
+    cf: { cacheTtl: 0, cacheEverything: false }
+  }, 4);
+  if (metaRes.status === 401) return { unauthorized: true };
+  if (!metaRes.ok) return { error: "Не удалось получить метаданные статусов (HTTP " + metaRes.status + ")" };
+  const meta = await metaRes.json();
+  const states = Array.isArray(meta.states) ? meta.states : (meta.states && Array.isArray(meta.states.rows) ? meta.states.rows : []);
+  const shippedState = states.find(function(state) { return state && state.name === STATUS_SHIPPED_NAME; });
+  if (!shippedState) return { error: "Статус «" + STATUS_SHIPPED_NAME + "» не найден в настройках МойСклад" };
+  return { state: shippedState };
+}
+
+async function updateDemandToShipped(id, auth, shippedState) {
+  let demandRes;
+  try {
+    demandRes = await fetchMsRetry(API_BASE + "/entity/demand/" + encodeURIComponent(id) + "?expand=state", {
+      headers: { "Authorization": auth },
+      cf: { cacheTtl: 0, cacheEverything: false }
+    }, 4);
+  } catch (e) {
+    return { ok: false, error: "Не удалось прочитать отгрузку после повторных попыток: " + String(e && e.message || e) };
+  }
+  if (demandRes.status === 401) return { ok: false, unauthorized: true };
+  if (!demandRes.ok) return { ok: false, error: "Не удалось прочитать отгрузку (HTTP " + demandRes.status + ")" };
+
+  const demand = await demandRes.json();
+  const currentState = demand.state ? demand.state.name : null;
+  if (currentState === STATUS_SHIPPED_NAME) return { ok: true, alreadyShipped: true };
+  if (currentState !== STATUS_READY_NAME) return { ok: false, error: "Текущий статус: " + (currentState || "—") };
+  if (!shippedState || !shippedState.meta) return { ok: false, error: "Не удалось определить метаданные статуса «" + STATUS_SHIPPED_NAME + "»" };
+
+  let putRes;
+  try {
+    putRes = await fetchMsRetry(API_BASE + "/entity/demand/" + encodeURIComponent(id), {
+      method: "PUT",
+      headers: { "Authorization": auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ state: { meta: shippedState.meta } }),
+      cf: { cacheTtl: 0, cacheEverything: false }
+    }, 4);
+  } catch (e) {
+    return { ok: false, error: "Ошибка соединения при смене статуса: " + String(e && e.message || e) };
+  }
+  if (putRes.status === 401) return { ok: false, unauthorized: true };
+  if (!putRes.ok) {
+    let detail = "";
+    try {
+      const errorData = await putRes.clone().json();
+      detail = errorData.errors && errorData.errors[0] && errorData.errors[0].error ? ": " + errorData.errors[0].error : (errorData.error ? ": " + errorData.error : "");
+    } catch (_) {}
+    return { ok: false, error: "МойСклад отклонил смену статуса (HTTP " + putRes.status + ")" + detail };
+  }
+
+  // Do not trust the PUT response alone: re-read the document and confirm its state.
+  let lastState = "не удалось проверить";
+  for (let check = 0; check < 4; check++) {
+    if (check > 0) await new Promise(function(resolve) { setTimeout(resolve, 300 * check); });
+    let verifyRes;
+    try {
+      verifyRes = await fetchMsRetry(API_BASE + "/entity/demand/" + encodeURIComponent(id) + "?expand=state", {
+        headers: { "Authorization": auth },
+        cf: { cacheTtl: 0, cacheEverything: false }
+      }, 3);
+    } catch (e) {
+      lastState = "ошибка проверки: " + String(e && e.message || e);
+      continue;
+    }
+    if (verifyRes.status === 401) return { ok: false, unauthorized: true };
+    if (!verifyRes.ok) { lastState = "HTTP " + verifyRes.status; continue; }
+    const verified = await verifyRes.json();
+    lastState = verified.state && verified.state.name ? verified.state.name : "без статуса";
+    if (lastState === STATUS_SHIPPED_NAME) return { ok: true };
+    if (lastState !== STATUS_READY_NAME) break;
+  }
+  return { ok: false, error: "МойСклад принял запрос, но статус не подтвердился при повторной проверке (сейчас: " + lastState + ")" };
+}
+
 async function handleShip(request, auth) {
   const body = await request.json();
   const id = body.id;
   if (!id) return json({ error: "Не передан id" }, 400);
-  const demandRes = await fetch(API_BASE + "/entity/demand/" + encodeURIComponent(id) + "?expand=state", {
-    headers: { "Authorization": auth },
-    cf: { cacheTtl: 0, cacheEverything: false }
-  });
-  if (demandRes.status === 401) return unauthorized();
-  if (!demandRes.ok) return json({ error: "Не удалось проверить" }, 502);
-  const demand = await demandRes.json();
-  const currentState = demand.state ? demand.state.name : null;
-  if (currentState !== STATUS_READY_NAME) {
-    return json({ ok: false, error: "Статус: " + (currentState || "—") }, 409);
+  try {
+    const metaResult = await readShippedStateMeta(auth);
+    if (metaResult.unauthorized) return unauthorized();
+    if (!metaResult.state) return json({ ok: false, error: metaResult.error || "Не удалось получить статус" }, 502);
+    const result = await updateDemandToShipped(id, auth, metaResult.state);
+    if (result.unauthorized) return unauthorized();
+    if (!result.ok) return json({ ok: false, error: result.error || "Не удалось сменить статус" }, 502);
+    return json({ ok: true, alreadyShipped: !!result.alreadyShipped, verified: true });
+  } catch (e) {
+    return json({ ok: false, error: "Ошибка обработки статуса: " + String(e && e.message || e) }, 502);
   }
-  const metaRes = await fetch(API_BASE + "/entity/demand/metadata", { headers: { "Authorization": auth } });
-  if (!metaRes.ok) return json({ error: "Не удалось получить метаданные" }, 502);
-  const meta = await metaRes.json();
-  const states = meta.states || (meta.states && meta.states.rows) || [];
-  let shippedState = null;
-  for (let i = 0; i < states.length; i++) {
-    if (states[i].name === STATUS_SHIPPED_NAME) { shippedState = states[i]; break; }
-  }
-  if (!shippedState) return json({ error: "Статус не найден" }, 500);
-  const putRes = await fetch(API_BASE + "/entity/demand/" + encodeURIComponent(id), {
-    method: "PUT",
-    headers: { "Authorization": auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ state: { meta: shippedState.meta } })
-  });
-  if (putRes.status === 401) return unauthorized();
-  if (!putRes.ok) return json({ error: "Не удалось сменить статус" }, 502);
-  return json({ ok: true });
 }
 
 async function handleFinish(request, auth) {
   const body = await request.json();
   const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter(Boolean))].slice(0, 100) : [];
   if (!ids.length) return json({ error: "Список пуст" }, 400);
+
+  // Fetch status metadata once per route batch, not once per shipment.
+  const metaResult = await readShippedStateMeta(auth);
+  if (metaResult.unauthorized) return unauthorized();
+  if (!metaResult.state) {
+    return json({ ok: true, results: ids.map(function(id) { return { id: id, ok: false, error: metaResult.error || "Не удалось получить статус" }; }) });
+  }
+
   const results = [];
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     try {
-      const demandRes = await fetch(API_BASE + "/entity/demand/" + encodeURIComponent(id) + "?expand=state", {
-        headers: { "Authorization": auth },
-        cf: { cacheTtl: 0, cacheEverything: false }
-      });
-      if (demandRes.status === 401) return unauthorized();
-      if (!demandRes.ok) { results.push({ id: id, ok: false, error: "Ошибка" }); continue; }
-      const demand = await demandRes.json();
-      const currentState = demand.state ? demand.state.name : null;
-      if (currentState === STATUS_SHIPPED_NAME) { results.push({ id: id, ok: true, alreadyShipped: true }); continue; }
-      if (currentState !== STATUS_READY_NAME) { results.push({ id: id, ok: false, error: "Статус: " + currentState }); continue; }
-      const metaRes = await fetch(API_BASE + "/entity/demand/metadata", { headers: { "Authorization": auth } });
-      if (!metaRes.ok) { results.push({ id: id, ok: false, error: "Ошибка метаданных" }); continue; }
-      const meta = await metaRes.json();
-      const states = meta.states || (meta.states && meta.states.rows) || [];
-      let shippedState = null;
-      for (let j = 0; j < states.length; j++) {
-        if (states[j].name === STATUS_SHIPPED_NAME) { shippedState = states[j]; break; }
-      }
-      if (!shippedState) { results.push({ id: id, ok: false, error: "Статус не найден" }); continue; }
-      const putRes = await fetch(API_BASE + "/entity/demand/" + encodeURIComponent(id), {
-        method: "PUT",
-        headers: { "Authorization": auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ state: { meta: shippedState.meta } })
-      });
-      if (putRes.status === 401) return unauthorized();
-      results.push({ id: id, ok: putRes.ok });
-    } catch (e) { results.push({ id: id, ok: false, error: "Ошибка" }); }
+      const result = await updateDemandToShipped(id, auth, metaResult.state);
+      if (result.unauthorized) return unauthorized();
+      results.push({ id: id, ok: !!result.ok, alreadyShipped: !!result.alreadyShipped, error: result.error || undefined });
+    } catch (e) {
+      results.push({ id: id, ok: false, error: "Неожиданная ошибка: " + String(e && e.message || e) });
+    }
   }
   return json({ ok: true, results: results });
 }
